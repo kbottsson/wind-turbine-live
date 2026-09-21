@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live wind turbine — real wind at your coordinate</title>
+    <meta
+      name="description"
+      content="A 3D wind turbine whose blade speed follows the real wind at a GPS coordinate you enter."
+    />
+    <link rel="stylesheet" href="styles/app.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="wrap">
+        <h1>Live wind turbine</h1>
+        <p class="tagline">
+          Enter a GPS coordinate. The rotor turns at the speed the real wind at 100&nbsp;m would
+          drive it.
+        </p>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <form id="lookup" class="lookup" novalidate>
+        <label class="field">
+          <span class="field-label">GPS coordinate</span>
+          <input
+            id="coord"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="52.5200, 13.4050   ·   N52°31'12&quot; E13°24'18&quot;   ·   paste a Google Maps link"
+          />
+        </label>
+        <div class="actions">
+          <button id="submit" class="btn primary" type="submit">Look up</button>
+          <button id="locate" class="btn ghost" type="button">Use my location</button>
+        </div>
+        <p id="form-msg" class="form-msg" role="status" aria-live="polite"></p>
+      </form>
+
+      <div class="stage-wrap">
+        <section class="stage" aria-label="3D wind turbine">
+          <canvas id="canvas" class="canvas" hidden></canvas>
+
+          <div id="stage-fallback" class="stage-fallback">
+            <svg class="fallback-turbine" viewBox="0 0 240 260" aria-hidden="true">
+              <g fill="currentColor">
+                <path d="M112 252 L128 252 L123 92 L117 92 Z" />
+                <rect x="116" y="80" width="30" height="13" rx="6" />
+                <circle cx="146" cy="86.5" r="5.5" />
+                <g transform="rotate(0 146 86.5)">
+                  <path d="M146 86.5 C143 70 141 58 142.5 44 L149.5 44 C151 58 149 70 146 86.5 Z" />
+                </g>
+                <g transform="rotate(120 146 86.5)">
+                  <path d="M146 86.5 C143 70 141 58 142.5 44 L149.5 44 C151 58 149 70 146 86.5 Z" />
+                </g>
+                <g transform="rotate(240 146 86.5)">
+                  <path d="M146 86.5 C143 70 141 58 142.5 44 L149.5 44 C151 58 149 70 146 86.5 Z" />
+                </g>
+              </g>
+            </svg>
+            <p id="fallback-msg" class="fallback-msg">Loading the 3D scene…</p>
+          </div>
+
+          <div class="hud hud-top">
+            <span id="state-badge" class="badge" data-state="idle">Idle</span>
+            <span id="state-note" class="state-note"></span>
+          </div>
+        </section>
+
+        <aside class="readout-panel" aria-label="Readings">
+          <dl class="readout">
+            <div class="row">
+              <dt>Wind at 100 m</dt>
+              <dd>
+                <span id="v-wind">—</span>
+                <button id="unit-toggle" class="unit-btn" type="button" title="Switch unit">m/s</button>
+              </dd>
+            </div>
+            <div class="row">
+              <dt>Gust</dt>
+              <dd id="v-gust">—</dd>
+            </div>
+            <div class="row">
+              <dt>Direction</dt>
+              <dd><span id="v-dir">—</span> <span id="v-dir-arrow" class="arrow">↑</span></dd>
+            </div>
+            <div class="row">
+              <dt>Rotor speed</dt>
+              <dd><span id="v-rpm">—</span> <span class="unit-fixed">rpm</span></dd>
+            </div>
+            <div class="row">
+              <dt>Power</dt>
+              <dd id="v-power">—</dd>
+            </div>
+            <div class="row">
+              <dt>Coordinate</dt>
+              <dd id="v-coord" class="mono">—</dd>
+            </div>
+            <div class="row">
+              <dt>Sample hour</dt>
+              <dd id="v-time" class="mono">—</dd>
+            </div>
+          </dl>
+          <button id="refresh" class="btn tiny ghost" type="button">Refresh now</button>
+        </aside>
+      </div>
+
+      <details class="assumptions">
+        <summary>Assumptions, control law and data source</summary>
+        <div class="assumptions-body">
+          <table class="spec">
+            <tbody id="spec-rows"></tbody>
+          </table>
+          <div class="explain">
+            <p>
+              <strong>Why the blades stop speeding up in strong wind.</strong> Below the rated wind
+              speed a real turbine holds a constant tip-speed ratio, so rotor rpm rises in step with
+              wind speed. Once the generator reaches its rated power the blades pitch to shed the
+              excess wind: the rotor keeps turning at a constant speed while the extra energy is
+              deliberately not harvested. Above the cut-out speed the machine feathers and parks.
+              That is why a 12 m/s breeze and a 20 m/s storm look identical in blade speed — the
+              difference shows up in the state badge and the power figure.
+            </p>
+            <p id="explain-numbers" class="mono"></p>
+          </div>
+        </div>
+      </details>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <p>
+          Wind data from <a href="https://open-meteo.com/" rel="noopener">Open-Meteo</a>
+          (CC BY 4.0), read once per hour directly from your browser. Modelled turbine, not a real
+          machine; coordinates are sent to Open-Meteo only.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      // three.js is loaded from a CDN by decision, and the app's own ES modules cannot load from
+      // a file:// page at all (Chrome blocks the module request from a null origin). Either way
+      // the page never starts, so this guard states both possibilities and leaves the parked
+      // fallback turbine on screen.
+      window.__wtBootOk = false;
+      setTimeout(function () {
+        if (window.__wtBootOk) return;
+        var badge = document.getElementById('state-badge');
+        badge.textContent = 'Error';
+        badge.dataset.state = 'error';
+        document.getElementById('state-note').textContent =
+          'The 3D scene could not start — see the message below.';
+        document.getElementById('fallback-msg').textContent =
+          location.protocol === 'file:'
+            ? 'This page was opened directly from disk. Browsers block web-page scripts on file:// ' +
+              'addresses, so nothing can load. Serve it over http instead — the README shows how.'
+            : 'Could not load three.js from the CDN. Check your internet connection and reload. ' +
+              'The turbine stays parked until then.';
+      }, 8000);
+    </script>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>

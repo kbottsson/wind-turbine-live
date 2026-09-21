@@ -1,0 +1,11 @@
+{
+  "name": "wind-turbine-live",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "3D wind turbine whose blade speed follows the real wind at a GPS coordinate",
+  "scripts": {
+    "test": "node --test 'tests/*.test.mjs'",
+    "serve": "./run.sh"
+  }
+}
