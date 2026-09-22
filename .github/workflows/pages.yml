@@ -1,0 +1,49 @@
+name: Deploy to GitHub Pages
+
+# Publishes the page on every push to main, so the live site cannot drift from the code.
+# Only index.html, styles/ and src/ are served — the tests, scripts and README stay in the
+# repository and are not part of the published site.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the static site
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -R styles src _site/
+          touch _site/.nojekyll
+
+      - name: Run the unit tests before publishing
+        run: |
+          node --version
+          node --test 'tests/*.test.mjs'
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

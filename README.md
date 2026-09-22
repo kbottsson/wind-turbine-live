@@ -7,6 +7,9 @@ Enter a coordinate, and the page reads the wind at 100 m (normal hub height) fro
 forecast API, then sets the rotor speed with a real turbine control law: proportional to wind
 below the rated speed, flat above it, and stopped outside the operating range.
 
+**Live at <https://kbottsson.github.io/wind-turbine-live/>** — deployed by GitHub Pages from this
+repository on every push to `main`, so the site cannot drift from the code.
+
 ```
 npm test              # 30 unit tests for the coordinate parser, control law and motion maths
 ./run.sh              # serve locally at http://localhost:8080/
@@ -31,22 +34,17 @@ files never leave the machine.
 To make it reachable from your phone on the same wifi, the local server already binds all
 interfaces: `http://<your-mac-ip>:8080/`.
 
-### Hosting it publicly — GitHub Pages is **not** available here
+### Hosting
 
-An attempt to enable Pages on the private repo `kbottsson/wind-turbine-live` was rejected by the
-GitHub API:
+Published on GitHub Pages at <https://kbottsson.github.io/wind-turbine-live/>. The repository is
+public, which is what makes Pages free; nothing in it is secret (no API keys are used anywhere).
 
-```
-POST /repos/kbottsson/wind-turbine-live/pages -> 422
-{"message": "Your current plan does not support GitHub Pages for this repository."}
-```
+`.github/workflows/pages.yml` runs the unit tests, stages only `index.html`, `styles/` and `src/`
+into the artifact, and deploys on every push to `main`. Tests, scripts and this README stay in the
+repository and are not served by the site.
 
-Pages on a private repository needs a paid plan (Pro/Team/Enterprise). Three options:
-
-1. Make the repo public — Pages then works on the free plan and you get a real URL that also works
-   on a phone. Nothing in this repository is secret (no API keys are used anywhere).
-2. Keep it private and run `./run.sh` locally.
-3. Upgrade the account to Pro, then re-run the Pages call above.
+Because it is served from a normal https origin, the weather lookup works there directly — no local
+server, and it works on a phone.
 
 ## Using the page
 
