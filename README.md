@@ -31,8 +31,17 @@ The page degrades to its parked fallback turbine with an explanation, which is t
 behaviour, but nothing works. Serving over `http://` is one command and needs no install — the
 files never leave the machine.
 
-To make it reachable from your phone on the same wifi, the local server already binds all
-interfaces: `http://<your-mac-ip>:8080/`.
+The server binds `127.0.0.1` only, so the page is **not** reachable from other devices on your
+network. Open http://localhost:8080/.
+
+To test it on a phone on the same wifi, ask for the LAN binding explicitly:
+
+```bash
+./run.sh 8080 lan        # prints the http://<your-ip>:8080/ address to open on the phone
+```
+
+`python3 -m http.server` serves the directory without any authentication, so only use `lan` on a
+network you trust, and stop it when you're done.
 
 ### Hosting
 
