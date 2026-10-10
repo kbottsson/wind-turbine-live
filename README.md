@@ -11,7 +11,7 @@ below the rated speed, flat above it, and stopped outside the operating range.
 repository on every push to `main`, so the site cannot drift from the code.
 
 ```
-npm test              # 30 unit tests for the coordinate parser, control law and motion maths
+npm test              # 77 unit tests for the coordinate parser, control law, motion and camera framing
 ./run.sh              # serve locally at http://localhost:8080/
 ./scripts/shots.sh    # render + assert every UI state in headless Chrome
 ```
@@ -78,6 +78,36 @@ deliberately out of scope, so the readout shows coordinates rather than a place 
 | `?wind=15&dir=45` | render a given wind speed and direction with no network read at all |
 
 The last coordinate you looked up is remembered in `localStorage`, so a revisit comes up live.
+
+## Camera
+
+The viewpoint is fixed, because the page is meant to hang on a wall and the machine is the thing
+that should move. A viewer stands on the ground **due south** of the tower at eye height (1.7 m),
+aimed at the machine's vertical centre, at the shortest stand-off that keeps both the topmost blade
+tip and the tower base inside the frame. For the default 2.5 MW machine that is about **234 m away
+and pitched 17° up**, so a 147 m machine fills ~80% of the frame height with the base and a strip of
+ground still in shot. Drag to orbit: the camera walks around the machine at ground level and cannot
+go below the grass. Nothing moves it on its own.
+
+Everything that changes hour to hour happens to the machine instead: the rotor speed follows the
+wind, and the nacelle yaws into it, so the machine's orientation is what tells you which way the
+wind is blowing. That cuts both ways, and it is worth knowing before hanging it on a wall — because
+the rotor faces into the wind, a southerly wind turns the rotor square to the viewer, a wind from
+the east shows it edge-on, and a northerly wind shows the machine from behind. Half the wind rose
+each way: that is an upwind turbine seen from a fixed point, not a defect of the view.
+
+The framing is pure maths in `src/framing.js`, unit tested for six aspect ratios from phone
+portrait to ultrawide, so the phone layout is a real standing view rather than a cropped desktop
+one. That module also owns the compass convention — bearing 0 is north, drawn as -Z; bearing 90 is
+east, drawn as +X — which the camera, the nacelle and the compass ring all have to agree on.
+Tunables live in `CAMERA` in `src/config.js`:
+
+| | |
+|---|---|
+| `eyeHeight` | 1.7 m — a standing person's eye, which is what keeps the tower base in view |
+| `fovDeg` / `marginDeg` | 40° lens, 2° of clearance so the tip and the ground stay off the frame edge |
+| `viewAzimuthDeg` | 180° — the viewer stands due south of the machine and looks north at it |
+| `standOff` | 1.06 — the extra distance that buys the strip of ground below the tower base |
 
 ## What the numbers mean
 
@@ -152,11 +182,12 @@ styles/app.css        all styling, including the phone layout
 run.sh                local http server
 src/config.js         every tunable number — the single source of truth
 src/wind-model.js     pure: coordinate parsing, control law, hourly sampling, motion maths
+src/framing.js        pure: the standing camera fit — aim height, stand-off, frame fractions
 src/api.js            Open-Meteo client, error normalisation
 src/turbine.js        procedural turbine geometry + the rig that applies rpm and yaw
-src/scene.js          renderer, camera fit, lights, sky, ground, compass
+src/scene.js          renderer, standing camera, lights, sky, ground, compass
 src/main.js           wiring: input → data → control law → 3D + HUD, hourly timer
-tests/                node --test unit tests for src/wind-model.js
+tests/                node --test unit tests for src/wind-model.js and src/framing.js
 scripts/smoke-api.mjs live API check for a land, ocean and offshore coordinate
 scripts/shots.sh      renders and asserts every UI state in headless Chrome
 ```
@@ -167,9 +198,18 @@ from the physics. Three.js is loaded from a CDN (pinned), not vendored, by decis
 
 ## What has been verified, and how
 
-- `npm test` — 30 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
+- `npm test` — 77 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
   range rejection, junk), the control law against computed reference values, cut-out hysteresis,
-  hourly sampling and clamping, and the motion maths (rotor easing, yaw slew, angle integration).
+  hourly sampling and clamping, the motion maths (rotor easing, yaw slew, angle integration), and
+  the framing and compass maths (the tower base and the topmost blade tip both inside the frame,
+  with the machine filling most of it, for six aspect ratios from 9:16 to ultrawide; a bearing
+  mapping to the right scene direction; the nacelle's nose ending up on the wind's bearing; the
+  viewer standing due south and staying there whatever the wind does).
+- Yaw and viewpoint — measured from the live scene graph in a real browser, not from the maths:
+  for winds of 0°, 90°, 180° and 260° the nacelle's nose (the yaw group's world +X axis) ends up on
+  0°, 90°, 180° and 260° while the camera stays at 180° (due south) and 1.7 m. An earlier revision
+  set `rotation.y = -bearing`, which pointed the machine 90° off the wind and left the viewer
+  looking at the back of it.
 - `./scripts/shots.sh` — 11 states rendered in headless Chrome, with the readings read back out of
   the rendered DOM, not just eyeballed: parked, generating, rated, storm park, live, API blocked,
   CDN blocked, no WebGL, plus two phone-width layouts. Example values: 8 m/s → 11.0 rpm / 798 kW;

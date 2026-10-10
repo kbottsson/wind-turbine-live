@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { TURBINE, MOTION } from './config.js';
+import { facingRotationRad } from './framing.js';
 import { easeTowards, slewTowardsDeg, advanceAngle } from './wind-model.js';
 
 const TAU = Math.PI * 2;
@@ -210,8 +211,9 @@ export class TurbineRig {
 
   #apply() {
     this.rotor.rotation.x = this.rotorAngle;
-    // Scene convention: -Z is north, so a bearing h maps to rotation.y = -h.
-    this.yawGroup.rotation.y = (-this.yawDeg * Math.PI) / 180;
+    // The nacelle turns to face the wind, so its +X nose is rotated to the wind's bearing.
+    // Reaching for -yawDeg here (as an earlier revision did) points the machine 90° off.
+    this.yawGroup.rotation.y = facingRotationRad(this.yawDeg);
   }
 }
 

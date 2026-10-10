@@ -23,6 +23,20 @@ export const MOTION = Object.freeze({
   cameraAutoRotate: false,
 });
 
+// The viewer stands on the ground: eye height, aimed at the machine's vertical centre, far
+// enough back that the topmost blade tip and the tower base are both in the frame. The viewpoint
+// is fixed, because the page is meant to hang on a wall — the machine turns under it instead.
+// The rotor faces into the wind, so the nacelle's yaw is what shows which way the wind is blowing.
+export const CAMERA = Object.freeze({
+  fovDeg: 40,
+  eyeHeight: 1.7, // m — a standing person's eye, so the base of the tower stays in view
+  marginDeg: 2, // keep the blade tip and the ground clear of the frame edge
+  standOff: 1.06, // extra distance, so a strip of ground below the tower base stays in frame
+  viewAzimuthDeg: 180, // the viewer stands due south of the machine, looking north at it
+  compassRingFactor: 1.6, // ring radius, as a multiple of the standing distance
+  compassLabelSize: 0.055, // apparent height of the N/E/S/W labels, as a fraction of frame height
+});
+
 export const SITE = Object.freeze({
   apiBase: 'https://api.open-meteo.com/v1/forecast',
   hourlyVars: ['wind_speed_100m', 'wind_direction_10m', 'wind_gusts_10m'],

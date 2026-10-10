@@ -114,6 +114,9 @@ function boot() {
     setStatus,
     forceWind,
     rig: () => rig,
+    // Read-only handles for screenshot/DOM verification: the camera and the stage it lives in.
+    stage: () => stage,
+    camera: () => (stage ? stage.camera : null),
   };
 
   const prefill = coordFromUrl() || coordFromStorage();

@@ -3,12 +3,14 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { MOTION, TURBINE } from './config.js';
+import { CAMERA, MOTION, TURBINE } from './config.js';
+import { bearingVector, compassRingRadius, halfFov, standingView, viewerBearingDeg } from './framing.js';
 import { groundMaterial } from './turbine.js';
 
 const SKY_TOP = '#0a1521';
 const SKY_HORIZON = '#28455f';
 const SKY_BOTTOM = '#101a20';
+const LABEL_HEIGHT = 22; // m — the compass labels sit just above the ground plane
 
 export function createStage(canvas) {
   const renderer = new THREE.WebGLRenderer({
@@ -25,18 +27,20 @@ export function createStage(canvas) {
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(SKY_HORIZON, 620, 3200);
 
-  const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 5000);
-  camera.position.set(130, 110, 190);
+  const camera = new THREE.PerspectiveCamera(CAMERA.fovDeg, 1, 0.5, 5000);
+  // Provisional: fitCamera() replaces this on the first setSize(), a viewer on the ground.
+  camera.position.set(0, CAMERA.eyeHeight, 240);
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  const tipTop = TURBINE.hubHeight + 2 + TURBINE.rotorDiameter / 2; // topmost blade tip
-  controls.target.set(0, tipTop / 2, 0);
+  controls.target.set(0, standingView().aim, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.07;
   controls.enablePan = false;
   controls.minDistance = 60;
   controls.maxDistance = 900;
-  controls.maxPolarAngle = Math.PI / 2 - 0.03;
+  // The standing view looks *up* at the machine, so the useful orbit runs past the horizontal.
+  // Swinging under the ground plane is prevented in render().
+  controls.maxPolarAngle = Math.PI * 0.62;
   controls.autoRotate = MOTION.cameraAutoRotate && !prefersReducedMotion();
 
   // Touch devices: OrbitControls swallows the vertical drag, which traps the user on the
@@ -46,9 +50,37 @@ export function createStage(canvas) {
   addSky(scene);
   addLights(scene);
   addGround(scene);
-  addCompass(scene);
+  const compass = addCompass(scene);
 
   const state = { width: 1, height: 1 };
+
+  /** Stand the camera on the ground at a compass bearing from the tower, aimed at the machine. */
+  function placeView(bearingDeg) {
+    const { aim, distance } = standingView(camera.aspect);
+    const dir = bearingVector(bearingDeg);
+    controls.target.set(0, aim, 0);
+    camera.position.set(dir.x * distance, CAMERA.eyeHeight, dir.z * distance);
+    camera.lookAt(controls.target);
+  }
+
+  /**
+   * Stand the viewer on the ground at the fitted distance, aimed at the machine's vertical
+   * centre, and put the compass ring outside them. Re-run on every resize, so the phone layout
+   * is a genuine standing view rather than a cropped desktop framing.
+   *
+   * The viewpoint does not move: the bearing is fixed in config.js, and everything that changes
+   * hour to hour happens to the machine — the rotor speed and the nacelle yawing into the wind.
+   */
+  function fitCamera() {
+    placeView(viewerBearingDeg());
+
+    const ring = compassRingRadius(camera.aspect);
+    compass.ring.scale.setScalar(ring);
+    for (const label of compass.labels) {
+      label.position.set(label.userData.unitX * ring, LABEL_HEIGHT, label.userData.unitZ * ring);
+    }
+    controls.update();
+  }
 
   function setSize(width, height) {
     if (width < 1 || height < 1) return;
@@ -56,13 +88,37 @@ export function createStage(canvas) {
     state.height = height;
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
-    fitCamera(camera, controls);
+    fitCamera();
     camera.updateProjectionMatrix();
   }
 
   function render() {
     controls.update();
+    keepEyeAboveGround();
+    sizeCompassLabels();
     renderer.render(scene, camera);
+  }
+
+  /**
+   * The orbit is free to swing past the horizontal, which would put the camera under the ground
+   * plane. Hold it at eye height instead: the viewer walks around the machine on the ground.
+   */
+  function keepEyeAboveGround() {
+    if (camera.position.y >= CAMERA.eyeHeight) return;
+    camera.position.y = CAMERA.eyeHeight;
+    camera.lookAt(controls.target);
+  }
+
+  /**
+   * Keep the N/E/S/W labels the same size on screen whatever their distance: the ring runs from
+   * close to distant across the frame, and a compass rose is read as an overlay, not as scenery.
+   */
+  function sizeCompassLabels() {
+    const frameHeight = 2 * Math.tan(halfFov(camera.fov));
+    for (const label of compass.labels) {
+      const size = CAMERA.compassLabelSize * frameHeight * label.position.distanceTo(camera.position);
+      label.scale.set(size, size, 1);
+    }
   }
 
   function dispose() {
@@ -85,25 +141,6 @@ export function createStage(canvas) {
 
 export function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
-/**
- * Frame the whole machine deterministically for the given aspect ratio: a fixed distance
- * along a fixed viewing direction, chosen so the 100 m tower and 45 m rotor radius both fit.
- * Re-run on every resize, so the phone layout is not a cropped desktop framing.
- */
-function fitCamera(camera, controls) {
-  const fov = (camera.fov * Math.PI) / 180;
-  const tipTop = TURBINE.hubHeight + 2 + TURBINE.rotorDiameter / 2; // topmost blade tip, m
-  const fitHeight = tipTop + 26; // the machine spans 0 … tipTop, centred on the target
-  const fitWidth = TURBINE.rotorDiameter * 1.6;
-  const distanceV = fitHeight / 2 / Math.tan(fov / 2);
-  const distanceH = fitWidth / 2 / (Math.tan(fov / 2) * camera.aspect);
-  const distance = Math.max(distanceV, distanceH) * 1.03;
-  const direction = new THREE.Vector3(0.52, 0.42, 0.74).normalize();
-  camera.position.copy(controls.target).addScaledVector(direction, distance);
-  camera.lookAt(controls.target);
-  controls.update();
 }
 
 function addSky(scene) {
@@ -152,10 +189,14 @@ function addGround(scene) {
   scene.add(ground);
 }
 
-/** Compass ring so the nacelle's yaw into the wind is legible: -Z is north. */
+/**
+ * Ground compass so the nacelle's yaw into the wind is legible: -Z is north.
+ * Built at unit radius; fitCamera() scales it out to compassRingRadius() and positions the
+ * labels on that ring, so the ring always sits outside the viewer's stance.
+ */
 function addCompass(scene) {
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(250, 254, 128),
+    new THREE.RingGeometry(0.98, 1, 128),
     new THREE.MeshBasicMaterial({
       color: '#7fa4c4',
       transparent: true,
@@ -167,13 +208,13 @@ function addCompass(scene) {
   ring.position.y = 0.4;
   scene.add(ring);
 
-  const labels = [
-    ['N', 0, -246],
-    ['E', 246, 0],
-    ['S', 0, 246],
-    ['W', -246, 0],
+  const marks = [
+    ['N', 0, -1],
+    ['E', 1, 0],
+    ['S', 0, 1],
+    ['W', -1, 0],
   ];
-  for (const [text, x, z] of labels) {
+  const labels = marks.map(([text, unitX, unitZ]) => {
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: labelTexture(text),
@@ -182,10 +223,13 @@ function addCompass(scene) {
         opacity: 0.5,
       }),
     );
-    sprite.position.set(x, 22, z);
-    sprite.scale.set(22, 22, 1);
+    sprite.userData = { unitX, unitZ };
+    sprite.position.set(unitX * 250, LABEL_HEIGHT, unitZ * 250); // replaced by fitCamera()
     scene.add(sprite);
-  }
+    return sprite;
+  });
+
+  return { ring, labels };
 }
 
 function labelTexture(text) {
