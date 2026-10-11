@@ -134,6 +134,13 @@ rather than colliding.
 https://kbottsson.github.io/wind-turbine-live/lite.html?coord=55.7047,13.1910&px=4
 ```
 
+The panel fits whatever viewport it is given: it derives the framebuffer from the window, reserves
+the rows the readout needs, and shrinks the picture instead if the window is short. A tablet's
+browser toolbar costs roughly 50 px of height, which is exactly the kind of thing that quietly drops
+a row of data, so the data block keeps its space and the turbine gives ground. The design target is
+the 1024×600 panel the tablet has: at `?px=4` the framebuffer is 256×150 and each drawn pixel is
+exactly 4×4 screen pixels.
+
 | Parameter | Effect |
 |---|---|
 | `?coord=lat,lon` | coordinate to watch (`?lat=&lon=` also accepted). Remembered in `localStorage` |

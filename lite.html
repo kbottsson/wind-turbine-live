@@ -278,7 +278,12 @@
           ctx.imageSmoothingEnabled = false;
           // The picture gets the top of the screen and the data sits under it at full width, so
           // every reading has the whole screen to be read across rather than a narrow column.
-          SCENE_H = Math.round(H * (W >= 380 ? 0.56 : 0.62));
+          // The data block is given the room it needs first: on a short viewport (a tablet's
+          // browser toolbar costs ~50 px) the picture shrinks rather than the readings dropping out.
+          SCENE_H = Math.min(
+            Math.round(H * (W >= 380 ? 0.56 : 0.62)),
+            Math.max(Math.round(H * 0.45), H - 58)
+          );
           HORIZON = Math.round(SCENE_H * 0.8);
           HUB = { x: Math.round(W * 0.5), y: Math.round(SCENE_H * 0.36) };
           ROTOR_C = { x: HUB.x, y: HUB.y };
@@ -418,11 +423,11 @@
         function drawStrip(nextHours, fromY) {
           var shown = nextHours.slice(0, 12);
           if (!shown.length) return;
-          var maxH = Math.round((H - SCENE_H) * 0.26);
+          var maxH = Math.round((H - SCENE_H) * 0.22);
           var baseline = H - 2;
           // No room between the readings and the bottom edge: at the chunkiest scale the picture and
           // the headline number are the whole panel.
-          if (maxH < 6 || baseline - maxH < fromY + 2) return;
+          if (maxH < 6 || baseline - maxH < fromY + 1) return;
           var label = 'NEXT 12 H';
           var x0 = 6 + label.length * 6 + 8;
           var avail = W - x0 - 6;
@@ -456,7 +461,7 @@
           rect(0, top, W, 1, P.panelLine);
 
           var x = 6;
-          var y = top + 3;
+          var y = top + 2;
           var wide = W >= 180;
           var badge = BADGE[s.state] || BADGE.nodata;
           var badgeColour = P[badge[1]];
@@ -475,7 +480,7 @@
           if (W - 6 - hourW > unitEnd + 12) text(s.hourText, W - 6 - hourW, heroY + GLYPH * (heroScale - 1), P.muted, 1);
 
           // --- row 2: the readings, four columns wide or one compact line when there is no room ---
-          var rowY = wide ? y + GLYPH * heroScale + 4 : heroY + GLYPH + 4;
+          var rowY = wide ? y + GLYPH * heroScale + 3 : heroY + GLYPH + 4;
           var bottom = rowY + GLYPH;
           if (wide) {
             var cols = [
