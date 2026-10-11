@@ -543,7 +543,11 @@
           angle: 0,
           firstSample: true,
           note: '',
-          lastFrame: 0
+          lastFrame: 0,
+          lastPaint: 0,
+          lastSignature: '',
+          paints: 0,
+          force: true
         };
 
         function coordFromUrl() {
@@ -658,6 +662,7 @@
         }
 
         function applyCurrentHour() {
+          app.force = true; // a new reading must be painted now, not at the next cadence tick
           var sample = sampleHourly(app.hours, new Date());
           if (!sample) {
             app.sample = null;
@@ -794,13 +799,33 @@
           drawData(s, stamped);
         }
 
+        // The rotor is the only thing that moves, and it turns well under one revolution a second, so
+        // the panel is painted at a slow fixed cadence rather than once per animation frame — 60
+        // frames a second is wasted work and wasted battery on a tablet this old. When the machine is
+        // stopped nothing changes between readings, so the loop paints nothing at all until a reading
+        // or the clock changes. This is the panel's own power cost, and it is worth keeping near zero
+        // for something left on a wall all day.
+        var PAINT_MOVING_MS = 1000 / 12;
+        var PAINT_IDLE_MS = 1000;
+
         function frame(now) {
+          window.requestAnimationFrame(frame);
           var dt = app.lastFrame ? Math.min((now - app.lastFrame) / 1000, 0.1) : 0;
           app.lastFrame = now;
           app.rpm = easeTowards(app.rpm, app.targetRpm, dt, 4.0);
-          app.angle = advanceAngle(app.angle, app.rpm, dt);
+          var turning = app.rpm > 0.05 || app.targetRpm > 0.05;
+          if (turning) app.angle = advanceAngle(app.angle, app.rpm, dt);
+          if (document.hidden) return; // nobody can see it: stop painting entirely
+          if (!app.force && now - app.lastPaint < (turning ? PAINT_MOVING_MS : PAINT_IDLE_MS)) return;
+          var s = {};
+          fillText(s);
+          var sig = [s.state, s.windText, s.gustText, s.dirText, s.rpmText, s.powerText, s.hourText, app.angle.toFixed(1)].join('|');
+          if (!app.force && sig === app.lastSignature) return; // nothing different to show
+          app.force = false;
+          app.lastPaint = now;
+          app.lastSignature = sig;
+          app.paints++;
           draw(app.angle);
-          window.requestAnimationFrame(frame);
         }
 
         function reducedMotion() {
@@ -871,6 +896,10 @@
         window.__wtLite = {
           app: app,
           draw: draw,
+          frame: frame,
+          paints: function () {
+            return app.paints;
+          },
           sample: function () {
             return app.sample;
           }
