@@ -19,7 +19,7 @@ mkdir -p "$OUT"
 render() { # name, url, budget, window size, extra chrome args...
   local name="$1" url="$2" budget="$3" size="$4"
   shift 4
-  "$CHROME" --headless=new --disable-gpu --enable-unsafe-swiftshader --hide-scrollbars \
+  "$CHROME" --headless=new --disable-gpu --enable-unsafe-swiftshader --hide-scrollbars --run-all-compositor-stages-before-draw \
     "$@" --virtual-time-budget="$budget" --window-size="$size" \
     --screenshot="$OUT/$name.png" "$url" >/dev/null 2>&1
   echo "--- $name"
@@ -45,7 +45,7 @@ render "11-narrow-live"   "$BASE/?coord=52.5200,13.4050" 7000 560,1100
 # screenshots only. States are forced with the documented ?wind=&dir= demo parameters, and the
 # pixel scale with ?px=.
 lite() { # name, query string
-  "$CHROME" --headless=new --disable-gpu --enable-unsafe-swiftshader --hide-scrollbars \
+  "$CHROME" --headless=new --disable-gpu --enable-unsafe-swiftshader --hide-scrollbars --run-all-compositor-stages-before-draw \
     --virtual-time-budget=7000 --window-size=1024,600 \
     --screenshot="$OUT/$1.png" "$BASE/lite.html$2" >/dev/null 2>&1
   echo "--- $1 (lite panel screenshot; nothing in the DOM to assert)"

@@ -547,6 +547,7 @@
           lastPaint: 0,
           lastSignature: '',
           paints: 0,
+          loadedAt: 0,
           force: true
         };
 
@@ -802,11 +803,14 @@
         // The rotor is the only thing that moves, and it turns well under one revolution a second, so
         // the panel is painted at a slow fixed cadence rather than once per animation frame — 60
         // frames a second is wasted work and wasted battery on a tablet this old. When the machine is
-        // stopped nothing changes between readings, so the loop paints nothing at all until a reading
-        // or the clock changes. This is the panel's own power cost, and it is worth keeping near zero
-        // for something left on a wall all day.
-        var PAINT_MOVING_MS = 1000 / 12;
-        var PAINT_IDLE_MS = 1000;
+        // stopped it settles to a heartbeat of one paint a minute: enough to keep the picture
+        // composited on a surface that nobody is otherwise touching, and 3600 times cheaper than the
+        // frame rate it used to run at. This is the panel's own power cost, and for something left on
+        // a wall all day it is worth keeping near zero.
+        var PAINT_MOVING_MS = 1000 / 12; // while the rotor turns
+        var PAINT_SETTLE_MS = 1000; // while stopped, for the first few seconds after loading
+        var PAINT_HEARTBEAT_MS = 60000; // then just often enough to keep the canvas on screen
+        var SETTLE_WINDOW_MS = 10000;
 
         function frame(now) {
           window.requestAnimationFrame(frame);
@@ -816,11 +820,27 @@
           var turning = app.rpm > 0.05 || app.targetRpm > 0.05;
           if (turning) app.angle = advanceAngle(app.angle, app.rpm, dt);
           if (document.hidden) return; // nobody can see it: stop painting entirely
-          if (!app.force && now - app.lastPaint < (turning ? PAINT_MOVING_MS : PAINT_IDLE_MS)) return;
+
+          // Cheap gates first, so an idle panel does almost no work per animation frame at all.
+          var sincePaint = now - app.lastPaint;
+          if (!app.force) {
+            if (turning) {
+              if (sincePaint < PAINT_MOVING_MS) return;
+            } else if (sincePaint < 500) {
+              return; // nothing on a stopped panel can change faster than this
+            }
+          }
+
           var s = {};
           fillText(s);
           var sig = [s.state, s.windText, s.gustText, s.dirText, s.rpmText, s.powerText, s.hourText, app.angle.toFixed(1)].join('|');
-          if (!app.force && sig === app.lastSignature) return; // nothing different to show
+          var changed = sig !== app.lastSignature;
+          var settled = now - app.loadedAt < SETTLE_WINDOW_MS;
+          var due = turning
+            ? sincePaint >= PAINT_MOVING_MS
+            : sincePaint >= (settled ? PAINT_SETTLE_MS : PAINT_HEARTBEAT_MS);
+          if (!app.force && !due && !(changed && sincePaint >= PAINT_SETTLE_MS)) return;
+
           app.force = false;
           app.lastPaint = now;
           app.lastSignature = sig;
@@ -834,6 +854,7 @@
 
         function start() {
           layout();
+          app.loadedAt = window.performance && performance.now ? performance.now() : Date.now();
           var demo = q.get('wind');
           if (demo !== null && demo !== '') {
             var v = parseFloat(demo);

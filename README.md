@@ -147,9 +147,9 @@ the picture on top and stacks the readings two by two, because a tall panel has 
 The readings drop to fewer columns only when the room genuinely is not there.
 
 The panel is also written to be cheap to leave running: the rotor is the only thing that moves, so the
-picture is repainted at a fixed slow cadence rather than once per animation frame, and when the
-machine is parked or tripped the loop repaints nothing at all until a reading or the clock changes.
-Measured over ten seconds driven at 60 Hz: 600 paints before, 102 while turning, 1 while parked.
+picture is repainted at a fixed slow cadence rather than once per animation frame, and a stopped
+machine drops to a heartbeat of one paint a minute. Measured over ten seconds driven at 60 Hz: 600
+paints before, 102 while turning, and about ten a minute while parked.
 
 | Parameter | Effect |
 |---|---|
