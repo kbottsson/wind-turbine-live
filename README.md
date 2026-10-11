@@ -11,7 +11,7 @@ below the rated speed, flat above it, and stopped outside the operating range.
 repository on every push to `main`, so the site cannot drift from the code.
 
 ```
-npm test              # 77 unit tests for the coordinate parser, control law, motion and camera framing
+npm test              # 88 unit tests for the coordinate parser, control law, motion and panels
 ./run.sh              # serve locally at http://localhost:8080/
 ./scripts/shots.sh    # render + assert every UI state in headless Chrome
 ```
@@ -109,6 +109,35 @@ Tunables live in `CAMERA` in `src/config.js`:
 | `viewAzimuthDeg` | 180° — the viewer stands due south of the machine and looks north at it |
 | `standOff` | 1.06 — the extra distance that buys the strip of ground below the tower base |
 
+## The panel page — `lite.html`
+
+A second page draws the same turbine as a **pixel-art panel**, for screens this one cannot reach:
+a 2017 Fire tablet, an e-ink display, an old browser. It exists because `index.html` needs two
+things those devices lack — ES module import maps (Chromium 89+, Firefox 108+) and WebGL 2, which
+three.js has required since r163 — and no amount of browser updating fixes a GPU without OpenGL
+ES 3.0.
+
+Nothing about it is modern: one plain `XMLHttpRequest`, one canvas, and a hand-built 5×7 bitmap
+font. The whole panel is drawn into a small framebuffer — 256×150 by default — and displayed at an
+integer scale, so at `?px=4` every drawn pixel is exactly 4×4 screen pixels with no smoothing. The
+same page therefore renders identically on the Fire tablet, on a modern laptop, and quantised to a
+PNG for e-ink.
+
+```
+https://kbottsson.github.io/wind-turbine-live/lite.html?coord=55.7047,13.1910&px=4
+```
+
+| Parameter | Effect |
+|---|---|
+| `?coord=lat,lon` | coordinate to watch (`?lat=&lon=` also accepted). Remembered in `localStorage` |
+| `?px=N` | pixel scale, integer: 2 is fine and detailed, 4 is the default, 8 is chunky. The scale decides how much of the readout fits — at ×8 only wind, direction and rotor speed remain |
+| `?wind=8&dir=260` | demo: render a wind speed and direction with no network read |
+
+It reads the same Open-Meteo series at the same cadence as the 3D page (once an hour, re-read every
+6), runs the same control law and cut-out hysteresis, and eases the rotor with the same 4 s time
+constant. The viewer stands due south and never moves: the machine does the moving, and the rotor
+disc foreshortens as the wind veers, so the panel still shows which way it is facing without any 3D.
+
 ## What the numbers mean
 
 The machine is a **generic 2.5 MW class turbine**, not a specific real product:
@@ -178,6 +207,7 @@ canvas, never a spinner:
 
 ```
 index.html            markup, import map pinning three.js 0.186.0 (CDN), boot guard
+lite.html             the pixel-art panel page: no modules, no import maps, no WebGL (see above)
 styles/app.css        all styling, including the phone layout
 run.sh                local http server
 src/config.js         every tunable number — the single source of truth
@@ -187,9 +217,9 @@ src/api.js            Open-Meteo client, error normalisation
 src/turbine.js        procedural turbine geometry + the rig that applies rpm and yaw
 src/scene.js          renderer, standing camera, lights, sky, ground, compass
 src/main.js           wiring: input → data → control law → 3D + HUD, hourly timer
-tests/                node --test unit tests for src/wind-model.js and src/framing.js
+tests/                node --test unit tests for src/wind-model.js, src/framing.js and lite.html
 scripts/smoke-api.mjs live API check for a land, ocean and offshore coordinate
-scripts/shots.sh      renders and asserts every UI state in headless Chrome
+scripts/shots.sh      renders and asserts every UI state in headless Chrome, plus the lite states
 ```
 
 To model a different machine, change `TURBINE` in `src/config.js` — the geometry, the control law,
@@ -198,13 +228,20 @@ from the physics. Three.js is loaded from a CDN (pinned), not vendored, by decis
 
 ## What has been verified, and how
 
-- `npm test` — 77 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
+- `npm test` — 88 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
   range rejection, junk), the control law against computed reference values, cut-out hysteresis,
-  hourly sampling and clamping, the motion maths (rotor easing, yaw slew, angle integration), and
-  the framing and compass maths (the tower base and the topmost blade tip both inside the frame,
-  with the machine filling most of it, for six aspect ratios from 9:16 to ultrawide; a bearing
-  mapping to the right scene direction; the nacelle's nose ending up on the wind's bearing; the
-  viewer standing due south and staying there whatever the wind does).
+  hourly sampling and clamping, the motion maths (rotor easing, yaw slew, angle integration), the
+  framing and compass maths (the tower base and the topmost blade tip both inside the frame, with
+  the machine filling most of it, for six aspect ratios from 9:16 to ultrawide; a bearing mapping to
+  the right scene direction; the nacelle's nose ending up on the wind's bearing; the viewer standing
+  due south and staying there whatever the wind does), and the lite panel (its inline copy of the
+  physics compared against `src/wind-model.js` across a 0–30 m/s sweep, including hysteresis and the
+  motion maths, plus guards that it contains no ES modules, no import maps, no external scripts and
+  no three.js).
+- The lite panel — both paths rendered in headless Chrome: `lite.html?wind=8&dir=260` (the demo
+  path) and `lite.html?coord=52.5200,13.4050`, which fetched live Open-Meteo data and showed
+  8.5 m/s at 244° SW → 964 kW with the GENERATING badge. States were checked by the badge colour in
+  the rendered pixels: green generating/rated, grey parked, red storm park, amber no data.
 - Yaw and viewpoint — measured from the live scene graph in a real browser, not from the maths:
   for winds of 0°, 90°, 180° and 260° the nacelle's nose (the yaw group's world +X axis) ends up on
   0°, 90°, 180° and 260° while the camera stays at 180° (due south) and 1.7 m. An earlier revision

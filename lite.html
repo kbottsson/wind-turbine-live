@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live wind turbine — pixel panel</title>
+    <meta
+      name="description"
+      content="A pixel-art panel showing a wind turbine whose blades turn at the speed the real wind at a coordinate would drive it."
+    />
+    <!--
+      lite.html — the same turbine, drawn as a pixel-art panel.
+
+      WHY THIS EXISTS: the 3D page (index.html) needs ES module import maps (Chromium 89+) and
+      WebGL 2, so it cannot run on an old tablet, an e-ink panel or any browser without those. This
+      page needs neither: one plain script, a canvas, and a hand-built 5x7 bitmap font. It is meant
+      to hang on a wall, so the viewpoint is fixed and the machine moves instead.
+
+      HOW IT DRAWS: everything goes into a small framebuffer (256x150 by default) which is then
+      displayed at an integer scale — at ?px=4 every drawn pixel is exactly 4x4 screen pixels, with
+      no smoothing. The pixel size is the only thing that changes between the looks:
+        ?px=2  finer, more detail   |  ?px=4  the default  |  ?px=5 / ?px=8  chunkier
+
+      URL parameters
+        ?coord=52.5200,13.4050   coordinate to watch (?lat=&lon= also works)
+        ?px=N                    pixel scale, integer, default 4
+        ?wind=8&dir=260          demo: render a wind speed and direction with no network read
+
+      The rotor is drawn at the real rotor speed, and the rotor disc foreshortens as the wind veers
+      — the viewer stands due south, so a wind from the south shows the disc square on, and a wind
+      from the east narrows it toward edge-on. On an e-ink panel the same page is rendered once and
+      pushed as a PNG; nothing here animates on its own except the rotor.
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      canvas {
+        display: block;
+        image-rendering: pixelated;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="panel" width="256" height="150"></canvas>
+    <noscript>
+      <p style="color: #e8eef5; font: 14px system-ui; padding: 20px">
+        This panel needs JavaScript to read the wind.
+      </p>
+    </noscript>
+    <script>
+      (function () {
+        'use strict';
+
+        var DEFAULT_PX = 4; // 4x4 screen pixels per drawn pixel; the tested, default look
+        var REFRESH_EVERY_HOURS = 6; // re-read the forecast every 6 hours, re-sample every hour
+        var API = 'https://api.open-meteo.com/v1/forecast';
+        var HOURLY_VARS = 'wind_speed_100m,wind_direction_10m,wind_gusts_10m';
+        var FETCH_TIMEOUT_MS = 10000;
+        var VIEWER_BEARING = 180; // the viewer stands due south, looking north (matches the 3D page)
+
+        /* ------------------------------------------------------------------ *
+         * LITE-MODEL-START
+         *
+         * The turbine's physics, as a plain ES5 port of src/wind-model.js. It lives inline and
+         * un-moduled so the page runs without import maps, and tests/lite-page.test.mjs evaluates
+         * this exact block and checks it against the canonical module across a sweep of wind
+         * speeds — so the two cannot drift apart.
+         * ------------------------------------------------------------------ */
+        var TURBINE = {
+          rotorDiameter: 90,
+          hubHeight: 100,
+          bladeCount: 3,
+          tipSpeedRatio: 6.5,
+          powerCoefficient: 0.4,
+          airDensity: 1.225,
+          ratedPower: 2.5e6,
+          cutInSpeed: 3.0,
+          cutOutSpeed: 25.0,
+          cutOutResetSpeed: 22.0
+        };
+
+        var TAU = Math.PI * 2;
+        var ROTOR_RADIUS = TURBINE.rotorDiameter / 2;
+        var SWEPT_AREA = Math.PI * ROTOR_RADIUS * ROTOR_RADIUS;
+
+        var RATED_WIND_SPEED = Math.cbrt(
+          TURBINE.ratedPower / (0.5 * TURBINE.airDensity * SWEPT_AREA * TURBINE.powerCoefficient)
+        );
+        var RPM_RATED = ((TURBINE.tipSpeedRatio * RATED_WIND_SPEED) / ROTOR_RADIUS) * (60 / TAU);
+
+        var STATE = {
+          NODATA: 'nodata',
+          PARKED: 'parked',
+          GENERATING: 'generating',
+          RATED: 'rated',
+          CUTOUT: 'cutout'
+        };
+
+        function finite(x) {
+          return typeof x === 'number' && isFinite(x);
+        }
+
+        function rpmForWind(v, opts) {
+          var cutOutSpeed = opts && opts.cutOutSpeed !== undefined ? opts.cutOutSpeed : TURBINE.cutOutSpeed;
+          if (!finite(v)) return 0;
+          if (v < TURBINE.cutInSpeed || v >= cutOutSpeed) return 0;
+          var rpm = ((TURBINE.tipSpeedRatio * v) / ROTOR_RADIUS) * (60 / TAU);
+          return Math.min(rpm, RPM_RATED);
+        }
+
+        function powerForWind(v, opts) {
+          var cutOutSpeed = opts && opts.cutOutSpeed !== undefined ? opts.cutOutSpeed : TURBINE.cutOutSpeed;
+          if (!finite(v)) return 0;
+          if (v < TURBINE.cutInSpeed || v >= cutOutSpeed) return 0;
+          var p = 0.5 * TURBINE.airDensity * SWEPT_AREA * v * v * v * TURBINE.powerCoefficient;
+          return Math.min(p, TURBINE.ratedPower);
+        }
+
+        function rotorStateForWind(v, opts) {
+          var prevState = opts && opts.prevState !== undefined ? opts.prevState : null;
+          if (!finite(v)) return { rpm: 0, power: 0, state: STATE.NODATA };
+          var cutOutSpeed = prevState === STATE.CUTOUT ? TURBINE.cutOutResetSpeed : TURBINE.cutOutSpeed;
+          if (v >= cutOutSpeed) return { rpm: 0, power: 0, state: STATE.CUTOUT };
+          if (v < TURBINE.cutInSpeed) return { rpm: 0, power: 0, state: STATE.PARKED };
+          return {
+            rpm: rpmForWind(v),
+            power: powerForWind(v),
+            state: v < RATED_WIND_SPEED ? STATE.GENERATING : STATE.RATED
+          };
+        }
+
+        function easeTowards(current, target, dt, tau) {
+          if (!finite(current)) return finite(target) ? target : 0;
+          if (!finite(target)) return current;
+          if (!(tau > 0)) return target;
+          if (!(dt > 0)) return current;
+          return current + (target - current) * (1 - Math.exp(-dt / tau));
+        }
+
+        function advanceAngle(angle, rpm, dt) {
+          if (!finite(angle) || !(dt > 0)) return angle || 0;
+          var safeRpm = finite(rpm) ? Math.max(rpm, 0) : 0;
+          return angle + (safeRpm / 60) * TAU * dt;
+        }
+
+        function sampleHourly(hours, when) {
+          if (!hours || !hours.length) return null;
+          var t = when instanceof Date ? when.getTime() : Number(when);
+          if (!finite(t)) return null;
+          var usable = [];
+          for (var i = 0; i < hours.length; i++) {
+            var h = hours[i];
+            if (h && finite(h.t) && finite(h.v100)) usable.push(h);
+          }
+          if (!usable.length) return null;
+          usable.sort(function (a, b) {
+            return a.t - b.t;
+          });
+          var pick = usable[0];
+          for (var j = 0; j < usable.length; j++) {
+            if (usable[j].t <= t) pick = usable[j];
+            else break;
+          }
+          return pick;
+        }
+
+        function msUntilNextHour(when) {
+          var t = when instanceof Date ? when.getTime() : Number(when);
+          return 3600000 - (t % 3600000);
+        }
+        /* LITE-MODEL-END */
+
+        // ---------------------------------------------------------------- palette
+        var P = {
+          sky: ['#0a1521', '#0e1d2c', '#132736', '#183142', '#1e3b50', '#28455f'],
+          horizon: '#35566f',
+          cloud: '#2b4155',
+          star: '#4d6b85',
+          hillFar: '#22322c',
+          ground: '#2b3a32',
+          groundDark: '#232f29',
+          groundLight: '#33443a',
+          tower: '#d5dbe2',
+          towerDark: '#9fabb8',
+          blade: '#e9eef4',
+          bladeDark: '#b9c4d0',
+          panelBg: '#10161e',
+          panelLine: '#26323f',
+          text: '#e8eef5',
+          muted: '#8296a8',
+          accent: '#48d39b',
+          warn: '#f0b429',
+          bad: '#e5604b'
+        };
+
+        // ------------------------------------------------- 5x7 bitmap font
+        var FONT = {
+          A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+          B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+          C: ['.####', '#....', '#....', '#....', '#....', '#....', '.####'],
+          D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+          E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+          F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
+          G: ['.###.', '#...#', '#....', '#..##', '#...#', '#...#', '.###.'],
+          H: ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+          I: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '#####'],
+          J: ['....#', '....#', '....#', '....#', '#...#', '#...#', '.###.'],
+          K: ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
+          L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+          M: ['#...#', '##.##', '#.#.#', '#...#', '#...#', '#...#', '#...#'],
+          N: ['#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#', '#...#'],
+          O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+          P: ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+          Q: ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
+          R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+          S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+          T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+          U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+          V: ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+          W: ['#...#', '#...#', '#...#', '#...#', '#.#.#', '##.##', '#...#'],
+          X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+          Y: ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+          Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+          0: ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+          1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+          2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+          3: ['####.', '....#', '....#', '.###.', '....#', '....#', '####.'],
+          4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+          5: ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+          6: ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
+          7: ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+          8: ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+          9: ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
+          '.': ['.....', '.....', '.....', '.....', '.....', '.##..', '.##..'],
+          ':': ['.....', '.##..', '.##..', '.....', '.##..', '.##..', '.....'],
+          '-': ['.....', '.....', '.....', '#####', '.....', '.....', '.....'],
+          '/': ['....#', '...#.', '...#.', '..#..', '.#...', '.#...', '#....'],
+          '+': ['.....', '..#..', '..#..', '#####', '..#..', '..#..', '.....'],
+          '\u00b0': ['.##..', '#..#.', '.##..', '.....', '.....', '.....', '.....'],
+          '\u2191': ['..#..', '.###.', '#.#.#', '..#..', '..#..', '..#..', '..#..'],
+          ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....']
+        };
+
+        // ---------------------------------------------------------------- canvas
+        var q = new URLSearchParams(location.search);
+        var PX = Math.max(1, Math.min(16, parseInt(q.get('px') || String(DEFAULT_PX), 10) || DEFAULT_PX));
+        var canvas = document.getElementById('panel');
+        var ctx = canvas.getContext('2d');
+        var W = 256;
+        var H = 150;
+        var GLYPH = 7;
+        var ROW = 12;
+        var SCENE_W = 154;
+        var HORIZON = 99;
+        var HUB = { x: 77, y: 50 };
+        var ROTOR_R = 23;
+        var HUB_HALF = 3;
+
+        function layout() {
+          W = Math.max(64, Math.floor(window.innerWidth / PX));
+          H = Math.max(48, Math.floor(window.innerHeight / PX));
+          canvas.width = W;
+          canvas.height = H;
+          canvas.style.width = W * PX + 'px';
+          canvas.style.height = H * PX + 'px';
+          ctx.imageSmoothingEnabled = false;
+          SCENE_W = Math.round(W * (W >= 380 ? 0.66 : 0.6));
+          HORIZON = Math.round(H * 0.66);
+          HUB = { x: Math.round(SCENE_W * 0.5), y: Math.round(H * 0.33) };
+          ROTOR_R = Math.round(H * 0.155);
+          HUB_HALF = Math.max(1, Math.round(H / 50));
+          ROW = GLYPH + Math.max(3, Math.round(H / 30));
+        }
+
+        function text(str, x, y, colour, scale) {
+          scale = scale || 1;
+          ctx.fillStyle = colour;
+          var cx = x;
+          for (var i = 0; i < str.length; i++) {
+            var g = FONT[String(str.charAt(i)).toUpperCase()] || FONT[' '];
+            for (var r = 0; r < 7; r++) {
+              for (var col = 0; col < 5; col++) {
+                if (g[r].charAt(col) === '#') ctx.fillRect(cx + col * scale, y + r * scale, scale, scale);
+              }
+            }
+            cx += 6 * scale;
+          }
+          return cx;
+        }
+
+        function rect(x, y, w, h, colour) {
+          ctx.fillStyle = colour;
+          ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+        }
+
+        function drawSky() {
+          var bands = Math.max(3, Math.round(H / 25));
+          var bandH = Math.ceil(HORIZON / bands);
+          for (var i = 0; i < bands; i++) {
+            var t = i / (bands - 1);
+            rect(0, i * bandH, SCENE_W, bandH, P.sky[Math.min(P.sky.length - 1, Math.round(t * (P.sky.length - 1)))]);
+          }
+          var n = Math.round((SCENE_W * HORIZON) / 1400);
+          for (var s = 0; s < n; s++) {
+            rect((s * 37 + 11) % SCENE_W, (s * 53 + 7) % Math.max(2, Math.round(HORIZON * 0.85)), 1, 1, P.star);
+          }
+          var cw = Math.round(SCENE_W * 0.26);
+          var cloudH = Math.max(2, H / 50);
+          rect(SCENE_W * 0.08, H * 0.3 + 2, cw, cloudH, P.cloud);
+          rect(SCENE_W * 0.08 + cw * 0.15, H * 0.3, cw * 0.7, cloudH, P.cloud);
+          rect(SCENE_W * 0.55, H * 0.2 + 2, cw * 0.8, cloudH, P.cloud);
+          rect(SCENE_W * 0.55 + cw * 0.1, H * 0.2, cw * 0.5, cloudH, P.cloud);
+          rect(0, HORIZON - 1, SCENE_W, 1, P.horizon);
+        }
+
+        function drawField() {
+          rect(0, HORIZON, SCENE_W, H - HORIZON, P.ground);
+          rect(0, HORIZON, SCENE_W, Math.max(1, Math.round(H / 50)), P.groundDark);
+          for (var x = 0; x < SCENE_W; x += 3) rect(x, HORIZON - 2, 2, 2, P.hillFar);
+          var farX = Math.round(SCENE_W * 0.83);
+          rect(farX, HORIZON - Math.round(H * 0.11), 1, Math.round(H * 0.11), P.towerDark);
+          rect(farX - Math.round(H * 0.03), HORIZON - Math.round(H * 0.05), 1, 1, P.towerDark);
+          rect(farX + Math.round(H * 0.03), HORIZON - Math.round(H * 0.04), 1, 1, P.towerDark);
+          var b = Math.round(H / 13);
+          for (var i = 1; i <= 3; i++) rect(0, HORIZON + b * i, SCENE_W, 1, P.groundDark);
+          var tufts = Math.round(SCENE_W / 6);
+          for (var g = 0; g < tufts; g++) {
+            rect(3 + ((g * 13) % (SCENE_W - 6)), HORIZON + 6 + ((g * 7) % Math.max(2, H - HORIZON - 10)), 1, 1, P.groundLight);
+          }
+        }
+
+        function drawBlade(angleDeg, narrow, k) {
+          var a = (angleDeg * Math.PI) / 180;
+          var cos = Math.cos(a);
+          var sin = Math.sin(a);
+          var pts = [[-2.0, 0], [-2.8, -8], [-2.3, -18], [-1.5, -22], [1.5, -22], [2.3, -18], [2.8, -8], [2.0, 0]];
+          ctx.beginPath();
+          for (var i = 0; i < pts.length; i++) {
+            var px = pts[i][0] * narrow * k;
+            var py = pts[i][1] * k;
+            var X = HUB.x + px * cos - py * sin;
+            var Y = HUB.y + px * sin + py * cos;
+            if (i === 0) ctx.moveTo(X, Y);
+            else ctx.lineTo(X, Y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = P.blade;
+          ctx.fill();
+        }
+
+        /** The rotor disc foreshortens with the wind: square on looking straight up the axis. */
+        function narrowFor(windBearing) {
+          var delta = ((windBearing - VIEWER_BEARING) * Math.PI) / 180;
+          return 0.22 + 0.78 * Math.abs(Math.cos(delta));
+        }
+
+        function drawTurbine(rotorAngle, narrow) {
+          var k = ROTOR_R / 22;
+          for (var y = HUB.y + 2; y <= HORIZON; y++) {
+            var t = (y - HUB.y) / (HORIZON - HUB.y);
+            var half = Math.max(1, Math.round(t * (H / 50)));
+            rect(HUB.x - half, y, half * 2 + 1, 1, t > 0.75 ? P.towerDark : P.tower);
+          }
+          rect(HUB.x - Math.round(H / 22), HORIZON - 1, Math.round(H / 11), Math.max(1, Math.round(H / 75)), P.towerDark);
+          var nacW = Math.round(W * 0.078);
+          var nacH = Math.max(3, Math.round(H * 0.04));
+          rect(HUB.x - nacW * 0.6, HUB.y - nacH / 2, nacW, nacH, P.blade);
+          rect(HUB.x - nacW * 0.6, HUB.y + nacH / 6, nacW, nacH / 3, P.bladeDark);
+          rect(HUB.x - 1, HUB.y - HUB_HALF - 1, HUB_HALF * 2 + 2, HUB_HALF * 2 + 2, P.tower);
+          for (var b = 0; b < TURBINE.bladeCount; b++) drawBlade(rotorAngle + b * (360 / TURBINE.bladeCount), narrow, k);
+          rect(HUB.x - HUB_HALF, HUB.y - HUB_HALF, HUB_HALF * 2 + 1, HUB_HALF * 2 + 1, P.towerDark);
+        }
+
+        function drawStrip(nextHours) {
+          var shown = nextHours.slice(0, W >= 300 ? 12 : W >= 180 ? 10 : 8);
+          var barW = Math.max(2, Math.round(SCENE_W / (shown.length * 1.7)));
+          var gap = Math.max(1, Math.round(barW / 3));
+          var labelsUnder = W >= 300;
+          var baseline = H - (labelsUnder ? 11 : 3);
+          var maxH = Math.round(H * 0.12);
+          var x0 = Math.round(SCENE_W * 0.04);
+          text('NEXT 12 H', x0, baseline - maxH - GLYPH - 3, P.muted, 1);
+          for (var i = 0; i < shown.length; i++) {
+            var v = shown[i].v100;
+            var h = finite(v) ? Math.max(1, Math.round((v / 16) * maxH)) : 1;
+            var off = !finite(v) || v < TURBINE.cutInSpeed || v >= TURBINE.cutOutSpeed;
+            rect(x0 + i * (barW + gap), baseline - h, barW, h, off ? P.muted : P.accent);
+          }
+          if (labelsUnder) {
+            for (var j = 0; j < shown.length; j++) {
+              text(String(new Date(shown[j].t).getHours()), x0 + j * (barW + gap), baseline + 3, P.muted, 1);
+            }
+          }
+        }
+
+        var BADGE = {
+          generating: ['GENERATING', 'accent'],
+          rated: ['RATED', 'accent'],
+          parked: ['PARKED', 'muted'],
+          cutout: ['STORM PARK', 'bad'],
+          nodata: ['NO DATA', 'warn']
+        };
+
+        function drawReadout(s) {
+          var x = SCENE_W;
+          rect(x, 0, W - x, H, P.panelBg);
+          rect(x, 0, 1, H, P.panelLine);
+          var pad = 4;
+          var labelX = x + pad;
+          var y = Math.max(3, Math.round(H * 0.04));
+          var badge = BADGE[s.state] || BADGE.nodata;
+          var badgeColour = P[badge[1]];
+
+          if (W < 180) {
+            var badgeW = 3 * 6 + 5;
+            rect(labelX - 1, y, badgeW, GLYPH + 3, badgeColour);
+            text('GEN', labelX + 2, y + 1, '#06231a', 1);
+            y += GLYPH + 5;
+            var pairs = [
+              ['WIND', s.windText, P.accent],
+              ['DIR', s.dirText, P.text],
+              ['RPM', s.rpmText, P.text]
+            ];
+            for (var p = 0; p < pairs.length; p++) {
+              text(pairs[p][0], labelX, y, P.muted, 1);
+              y += GLYPH + 1;
+              text(pairs[p][1], labelX, y, pairs[p][2], 1);
+              y += GLYPH + 3;
+            }
+            return;
+          }
+
+          var badgeW2 = badge[0].length * 6 + 6;
+          rect(labelX - 1, y, badgeW2, GLYPH + 4, badgeColour);
+          text(badge[0], labelX + 2, y + 2, '#06231a', 1);
+          y += GLYPH + 4 + Math.max(3, Math.round(H / 40));
+
+          var valueX = labelX + 34;
+          text('WIND 100 M', labelX, y, P.muted, 1);
+          y += GLYPH + 1;
+          var afterX = text(s.windText, labelX, y, P.accent, 2);
+          text('M/S', afterX + 2, y + GLYPH, P.muted, 1);
+          y += GLYPH * 2 + Math.max(3, Math.round(H / 30));
+
+          var rows =
+            W >= 240
+              ? [
+                  ['GUST', s.gustText],
+                  ['DIR', s.dirText],
+                  ['ROTOR', s.rpmText + ' RPM'],
+                  ['POWER', s.powerText],
+                  ['HOUR', s.hourText]
+                ]
+              : [
+                  ['DIR', s.dirText],
+                  ['ROTOR', s.rpmText + ' RPM'],
+                  ['POWER', s.powerText]
+                ];
+          for (var i = 0; i < rows.length && y + GLYPH < H - 4; i++) {
+            text(rows[i][0], labelX, y, P.muted, 1);
+            text(rows[i][1], valueX, y, P.text, 1);
+            y += ROW;
+          }
+          if (W >= 240 && y + (GLYPH + 3) * 2 + GLYPH < H) {
+            y += 2;
+            text('COORD', labelX, y, P.muted, 1);
+            text(s.coordText, labelX, y + GLYPH + 3, P.text, 1);
+            text('MODELLED 2.5 MW', labelX, y + (GLYPH + 3) * 2, P.muted, 1);
+          }
+        }
+
+        // ---------------------------------------------------------------- state
+        var app = {
+          lat: null,
+          lon: null,
+          hours: null,
+          hoursReadAt: 0,
+          sample: null,
+          prevState: null,
+          targetRpm: 0,
+          rpm: 0,
+          angle: 0,
+          firstSample: true,
+          note: '',
+          lastFrame: 0
+        };
+
+        function coordFromUrl() {
+          var coord = q.get('coord');
+          var lat = null;
+          var lon = null;
+          if (coord) {
+            var parts = coord.split(',');
+            if (parts.length === 2) {
+              lat = parseFloat(parts[0]);
+              lon = parseFloat(parts[1]);
+            }
+          } else if (q.get('lat') !== null && q.get('lon') !== null) {
+            lat = parseFloat(q.get('lat'));
+            lon = parseFloat(q.get('lon'));
+          }
+          if (!finite(lat) || !finite(lon)) return null;
+          if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+          return { lat: lat, lon: lon };
+        }
+
+        function storedCoord() {
+          try {
+            var raw = window.localStorage.getItem('windTurbineCoord');
+            if (!raw) return null;
+            var parsed = JSON.parse(raw);
+            return finite(parsed.lat) && finite(parsed.lon) ? parsed : null;
+          } catch (err) {
+            return null;
+          }
+        }
+
+        function rememberCoord(lat, lon) {
+          try {
+            window.localStorage.setItem('windTurbineCoord', JSON.stringify({ lat: lat, lon: lon }));
+          } catch (err) {
+            /* private mode: not fatal, the URL still carries the coordinate */
+          }
+        }
+
+        function buildUrl(lat, lon) {
+          return (
+            API +
+            '?latitude=' +
+            encodeURIComponent(lat) +
+            '&longitude=' +
+            encodeURIComponent(lon) +
+            '&hourly=' +
+            encodeURIComponent(HOURLY_VARS) +
+            '&wind_speed_unit=ms&timeformat=unixtime&past_days=1&forecast_days=2&timezone=UTC'
+          );
+        }
+
+        function num(value) {
+          return finite(value) ? value : null;
+        }
+
+        function normalise(payload) {
+          var hourly = payload && payload.hourly;
+          if (!hourly || !hourly.time) return null;
+          var speed = hourly.wind_speed_100m || [];
+          var dir = hourly.wind_direction_10m || [];
+          var gust = hourly.wind_gusts_10m || [];
+          var out = [];
+          for (var i = 0; i < hourly.time.length; i++) {
+            out.push({ t: hourly.time[i] * 1000, v100: num(speed[i]), dir: num(dir[i]), gust: num(gust[i]) });
+          }
+          return out.length ? out : null;
+        }
+
+        /** XHR rather than fetch: this page is meant to run on browsers old enough to lack it. */
+        function fetchWind(lat, lon, done) {
+          var attempt = 0;
+          function go() {
+            attempt += 1;
+            var xhr = new XMLHttpRequest();
+            var settled = false;
+            xhr.open('GET', buildUrl(lat, lon), true);
+            xhr.timeout = FETCH_TIMEOUT_MS;
+            xhr.onreadystatechange = function () {
+              if (xhr.readyState !== 4 || settled) return;
+              settled = true;
+              if (xhr.status >= 200 && xhr.status < 300) {
+                var payload;
+                try {
+                  payload = JSON.parse(xhr.responseText);
+                } catch (err) {
+                  return done({ error: 'parse', message: 'Could not read the wind data.' });
+                }
+                var hours = normalise(payload);
+                if (!hours) return done({ error: 'nodata', message: 'No wind data for this coordinate.' });
+                return done({ hours: hours });
+              }
+              if (xhr.status >= 500 && attempt < 2) return go();
+              done({ error: 'http', message: 'The wind data service refused the request.' });
+            };
+            xhr.ontimeout = function () {
+              if (!settled) {
+                settled = true;
+                done({ error: 'timeout', message: 'The wind data service did not answer.' });
+              }
+            };
+            xhr.onerror = function () {
+              if (!settled) {
+                settled = true;
+                done({ error: 'network', message: 'Could not reach the wind data service.' });
+              }
+            };
+            xhr.send();
+          }
+          go();
+        }
+
+        function applyCurrentHour() {
+          var sample = sampleHourly(app.hours, new Date());
+          if (!sample) {
+            app.sample = null;
+            app.prevState = null;
+            app.targetRpm = 0;
+            app.state = STATE.NODATA;
+            return;
+          }
+          app.sample = sample;
+          var next = rotorStateForWind(sample.v100, { prevState: app.prevState });
+          app.prevState = next.state;
+          app.state = next.state;
+          app.targetRpm = next.rpm;
+          app.power = next.power;
+          if (app.firstSample) {
+            // First reading of a fresh page: show the machine's actual speed at once rather than
+            // sweeping up from zero, which would briefly disagree with the power figure.
+            app.firstSample = false;
+            app.rpm = next.rpm;
+          }
+        }
+
+        function scheduleRefresh(immediate) {
+          window.clearTimeout(scheduleRefresh.timer);
+          var delay = immediate ? 0 : msUntilNextHour(new Date()) + 3000;
+          scheduleRefresh.timer = window.setTimeout(function () {
+            var stale = Date.now() - app.hoursReadAt > REFRESH_EVERY_HOURS * 3600000;
+            if (stale) readWind(true);
+            else {
+              applyCurrentHour();
+              scheduleRefresh(false);
+            }
+          }, delay);
+        }
+
+        function readWind(background) {
+          fetchWind(app.lat, app.lon, function (result) {
+            if (result.error) {
+              if (background && app.hours) {
+                app.note = 'showing the last read';
+                applyCurrentHour();
+              } else {
+                app.hours = null;
+                app.sample = null;
+                app.state = STATE.NODATA;
+                app.note = result.message;
+              }
+              return;
+            }
+            app.hours = result.hours;
+            app.hoursReadAt = Date.now();
+            app.note = '';
+            applyCurrentHour();
+            scheduleRefresh(false);
+          });
+        }
+
+        // -------------------------------------------------------------- render
+        function fillText(s) {
+          var wind = app.sample && finite(app.sample.v100) ? app.sample.v100 : null;
+          var gust = app.sample && finite(app.sample.gust) ? app.sample.gust : null;
+          var dir = app.sample && finite(app.sample.dir) ? app.sample.dir : null;
+          s.state = app.state || STATE.NODATA;
+          s.windText = wind === null ? '--' : wind.toFixed(1);
+          s.gustText = gust === null ? '--' : gust.toFixed(1) + ' M/S';
+          s.dirText = dir === null ? '--' : degrees(dir) + compass(dir);
+          s.rpmText = app.rpm.toFixed(1);
+          s.powerText = power(app.power);
+          s.hourText = app.sample ? hourLabel(app.sample.t) : '--';
+          s.coordText = app.lat === null ? '--' : app.lat.toFixed(4) + ' ' + app.lon.toFixed(4);
+          s.windTextMs = wind === null ? '--' : wind.toFixed(1) + ' M/S';
+        }
+
+        function degrees(dir) {
+          return String(Math.round(((dir % 360) + 360) % 360)) + '\u00b0';
+        }
+
+        function compass(dir) {
+          var points = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+          var idx = Math.round((((dir % 360) + 360) % 360) / 45) % 8;
+          return points[idx];
+        }
+
+        function power(watts) {
+          if (!finite(watts)) return '--';
+          if (watts >= 1e6) return (watts / 1e6).toFixed(2) + ' MW';
+          return Math.round(watts / 1000) + ' KW';
+        }
+
+        function hourLabel(t) {
+          var d = new Date(t);
+          var hh = String(d.getHours());
+          if (hh.length < 2) hh = '0' + hh;
+          return hh + ':00';
+        }
+
+        function nextHours(count) {
+          var out = [];
+          if (!app.hours) return out;
+          var now = Date.now();
+          for (var i = 0; i < app.hours.length && out.length < count; i++) {
+            if (app.hours[i].t > now) out.push(app.hours[i]);
+          }
+          return out;
+        }
+
+        function draw(angle) {
+          var s = {};
+          fillText(s);
+          var windBearing = app.sample && finite(app.sample.dir) ? app.sample.dir : VIEWER_BEARING;
+          var narrow = narrowFor(windBearing);
+          ctx.clearRect(0, 0, W, H);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, 0, SCENE_W, H);
+          ctx.clip();
+          drawSky();
+          drawField();
+          drawTurbine(angle, narrow);
+          drawStrip(nextHours(W >= 180 ? 10 : 8));
+          ctx.restore();
+          drawReadout(s);
+        }
+
+        function frame(now) {
+          var dt = app.lastFrame ? Math.min((now - app.lastFrame) / 1000, 0.1) : 0;
+          app.lastFrame = now;
+          app.rpm = easeTowards(app.rpm, app.targetRpm, dt, 4.0);
+          app.angle = advanceAngle(app.angle, app.rpm, dt);
+          draw(app.angle);
+          window.requestAnimationFrame(frame);
+        }
+
+        function reducedMotion() {
+          return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        }
+
+        function start() {
+          layout();
+          var demo = q.get('wind');
+          if (demo !== null && demo !== '') {
+            var v = parseFloat(demo);
+            var dir = parseFloat(q.get('dir') || '260');
+            var st = rotorStateForWind(v, { prevState: null });
+            app.lat = 52.52;
+            app.lon = 13.405;
+            app.sample = { t: Date.now(), v100: v, dir: dir, gust: finite(v) ? v + 3 : null };
+            app.state = st.state;
+            app.prevState = st.state;
+            app.targetRpm = st.rpm;
+            app.rpm = st.rpm; // screenshots must not have to wait for the easing
+            app.power = st.power;
+            app.hours = demoHours(v, dir);
+            if (reducedMotion()) draw(app.angle);
+            else window.requestAnimationFrame(frame);
+            return;
+          }
+
+          var coord = coordFromUrl() || storedCoord();
+          if (!coord) {
+            app.state = STATE.NODATA;
+            app.note = 'add ?coord=lat,lon';
+            draw(0);
+            return;
+          }
+          app.lat = coord.lat;
+          app.lon = coord.lon;
+          rememberCoord(coord.lat, coord.lon);
+          draw(0);
+          readWind(false);
+          if (reducedMotion()) {
+            window.setInterval(function () {
+              draw(app.angle);
+            }, 10000);
+          } else {
+            window.requestAnimationFrame(frame);
+          }
+        }
+
+        function demoHours(v, dir) {
+          var out = [];
+          var base = Date.now();
+          for (var i = 0; i < 36; i++) {
+            out.push({ t: base + i * 3600000, v100: Math.max(0, v - i * 0.4), dir: dir, gust: v + 3 });
+          }
+          return out;
+        }
+
+        window.addEventListener('resize', function () {
+          layout();
+        });
+        start();
+
+        // Handles for screenshot and DOM verification, mirroring the 3D page's window.__wt.
+        window.__wtLite = {
+          app: app,
+          draw: draw,
+          sample: function () {
+            return app.sample;
+          }
+        };
+      })();
+    </script>
+  </body>
+</html>

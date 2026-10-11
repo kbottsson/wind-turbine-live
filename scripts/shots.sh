@@ -41,6 +41,22 @@ render "09-no-webgl"      "$BASE/?coord=52.5200,13.4050" 7000 1280,1000 "--disab
 render "10-narrow-rated"  "$BASE/?wind=15&dir=45" 7000 560,1100
 render "11-narrow-live"   "$BASE/?coord=52.5200,13.4050" 7000 560,1100
 
+# The lite panel draws into a canvas, so there is no DOM text to read back and assert: these are
+# screenshots only. States are forced with the documented ?wind=&dir= demo parameters, and the
+# pixel scale with ?px=.
+lite() { # name, query string
+  "$CHROME" --headless=new --disable-gpu --enable-unsafe-swiftshader --hide-scrollbars \
+    --virtual-time-budget=7000 --window-size=1024,600 \
+    --screenshot="$OUT/$1.png" "$BASE/lite.html$2" >/dev/null 2>&1
+  echo "--- $1 (lite panel screenshot; nothing in the DOM to assert)"
+}
+
+lite "12-lite-generating" "?px=4&wind=8&dir=260"
+lite "13-lite-rated"      "?px=4&wind=15&dir=45"
+lite "14-lite-storm-park" "?px=4&wind=26&dir=200"
+lite "15-lite-parked"     "?px=4&wind=2&dir=0"
+lite "16-lite-chunky"     "?px=8&wind=8&dir=260"
+
 echo
 echo "screenshots in $OUT"
 ls -1 "$OUT"

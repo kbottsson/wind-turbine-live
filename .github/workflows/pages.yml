@@ -30,7 +30,7 @@ jobs:
       - name: Stage the static site
         run: |
           mkdir -p _site
-          cp index.html _site/
+          cp index.html lite.html _site/
           cp -R styles src _site/
           touch _site/.nojekyll
 
