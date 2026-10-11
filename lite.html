@@ -261,12 +261,11 @@
         var W = 256;
         var H = 150;
         var GLYPH = 7;
-        var ROW = 12;
-        var SCENE_W = 154;
-        var HORIZON = 99;
-        var HUB = { x: 77, y: 50 };
-        var ROTOR_R = 23;
-        var HUB_HALF = 3;
+        var SCENE_H = 92; // the picture band: full width, top of the screen
+        var HORIZON = 74;
+        var HUB = { x: 128, y: 33 };
+        var ROTOR_R = 28;
+        var HUB_HALF = 2;
 
         function layout() {
           W = Math.max(64, Math.floor(window.innerWidth / PX));
@@ -276,12 +275,13 @@
           canvas.style.width = W * PX + 'px';
           canvas.style.height = H * PX + 'px';
           ctx.imageSmoothingEnabled = false;
-          SCENE_W = Math.round(W * (W >= 380 ? 0.66 : 0.6));
-          HORIZON = Math.round(H * 0.66);
-          HUB = { x: Math.round(SCENE_W * 0.5), y: Math.round(H * 0.33) };
-          ROTOR_R = Math.round(H * 0.155);
-          HUB_HALF = Math.max(1, Math.round(H / 50));
-          ROW = GLYPH + Math.max(3, Math.round(H / 30));
+          // The picture gets the top of the screen and the data sits under it at full width, so
+          // every reading has the whole screen to be read across rather than a narrow column.
+          SCENE_H = Math.round(H * (W >= 380 ? 0.56 : 0.62));
+          HORIZON = Math.round(SCENE_H * 0.8);
+          HUB = { x: Math.round(W * 0.5), y: Math.round(SCENE_H * 0.36) };
+          ROTOR_R = Math.round(SCENE_H * 0.3);
+          HUB_HALF = Math.max(1, Math.round(SCENE_H / 50));
         }
 
         function text(str, x, y, colour, scale) {
@@ -306,38 +306,39 @@
         }
 
         function drawSky() {
-          var bands = Math.max(3, Math.round(H / 25));
+          var bands = Math.max(3, Math.round(SCENE_H / 16));
           var bandH = Math.ceil(HORIZON / bands);
           for (var i = 0; i < bands; i++) {
             var t = i / (bands - 1);
-            rect(0, i * bandH, SCENE_W, bandH, P.sky[Math.min(P.sky.length - 1, Math.round(t * (P.sky.length - 1)))]);
+            rect(0, i * bandH, W, bandH, P.sky[Math.min(P.sky.length - 1, Math.round(t * (P.sky.length - 1)))]);
           }
-          var n = Math.round((SCENE_W * HORIZON) / 1400);
+          var n = Math.round((W * HORIZON) / 1400);
           for (var s = 0; s < n; s++) {
-            rect((s * 37 + 11) % SCENE_W, (s * 53 + 7) % Math.max(2, Math.round(HORIZON * 0.85)), 1, 1, P.star);
+            rect((s * 37 + 11) % W, (s * 53 + 7) % Math.max(2, Math.round(HORIZON * 0.85)), 1, 1, P.star);
           }
-          var cw = Math.round(SCENE_W * 0.26);
-          var cloudH = Math.max(2, H / 50);
-          rect(SCENE_W * 0.08, H * 0.3 + 2, cw, cloudH, P.cloud);
-          rect(SCENE_W * 0.08 + cw * 0.15, H * 0.3, cw * 0.7, cloudH, P.cloud);
-          rect(SCENE_W * 0.55, H * 0.2 + 2, cw * 0.8, cloudH, P.cloud);
-          rect(SCENE_W * 0.55 + cw * 0.1, H * 0.2, cw * 0.5, cloudH, P.cloud);
-          rect(0, HORIZON - 1, SCENE_W, 1, P.horizon);
+          var cw = Math.round(W * 0.2);
+          var cloudH = Math.max(2, SCENE_H / 34);
+          rect(W * 0.06, SCENE_H * 0.28 + 2, cw, cloudH, P.cloud);
+          rect(W * 0.06 + cw * 0.15, SCENE_H * 0.28, cw * 0.7, cloudH, P.cloud);
+          rect(W * 0.62, SCENE_H * 0.18 + 2, cw * 0.8, cloudH, P.cloud);
+          rect(W * 0.62 + cw * 0.1, SCENE_H * 0.18, cw * 0.5, cloudH, P.cloud);
+          rect(0, HORIZON - 1, W, 1, P.horizon);
         }
 
         function drawField() {
-          rect(0, HORIZON, SCENE_W, H - HORIZON, P.ground);
-          rect(0, HORIZON, SCENE_W, Math.max(1, Math.round(H / 50)), P.groundDark);
-          for (var x = 0; x < SCENE_W; x += 3) rect(x, HORIZON - 2, 2, 2, P.hillFar);
-          var farX = Math.round(SCENE_W * 0.83);
-          rect(farX, HORIZON - Math.round(H * 0.11), 1, Math.round(H * 0.11), P.towerDark);
-          rect(farX - Math.round(H * 0.03), HORIZON - Math.round(H * 0.05), 1, 1, P.towerDark);
-          rect(farX + Math.round(H * 0.03), HORIZON - Math.round(H * 0.04), 1, 1, P.towerDark);
-          var b = Math.round(H / 13);
-          for (var i = 1; i <= 3; i++) rect(0, HORIZON + b * i, SCENE_W, 1, P.groundDark);
-          var tufts = Math.round(SCENE_W / 6);
+          rect(0, HORIZON, W, SCENE_H - HORIZON, P.ground);
+          rect(0, HORIZON, W, Math.max(1, Math.round(SCENE_H / 34)), P.groundDark);
+          for (var x = 0; x < W; x += 3) rect(x, HORIZON - 2, 2, 2, P.hillFar);
+          var farX = Math.round(W * 0.86);
+          var farH = Math.round(SCENE_H * 0.17);
+          rect(farX, HORIZON - farH, 1, farH, P.towerDark);
+          rect(farX - Math.round(SCENE_H * 0.045), HORIZON - Math.round(SCENE_H * 0.08), 1, 1, P.towerDark);
+          rect(farX + Math.round(SCENE_H * 0.045), HORIZON - Math.round(SCENE_H * 0.06), 1, 1, P.towerDark);
+          var b = Math.round((SCENE_H - HORIZON) / 3);
+          for (var i = 1; i <= 2; i++) rect(0, HORIZON + b * i, W, 1, P.groundDark);
+          var tufts = Math.round(W / 6);
           for (var g = 0; g < tufts; g++) {
-            rect(3 + ((g * 13) % (SCENE_W - 6)), HORIZON + 6 + ((g * 7) % Math.max(2, H - HORIZON - 10)), 1, 1, P.groundLight);
+            rect(3 + ((g * 13) % (W - 6)), HORIZON + 4 + ((g * 7) % Math.max(2, SCENE_H - HORIZON - 6)), 1, 1, P.groundLight);
           }
         }
 
@@ -370,12 +371,12 @@
           var k = ROTOR_R / 22;
           for (var y = HUB.y + 2; y <= HORIZON; y++) {
             var t = (y - HUB.y) / (HORIZON - HUB.y);
-            var half = Math.max(1, Math.round(t * (H / 50)));
+            var half = Math.max(1, Math.round(t * (SCENE_H / 30)));
             rect(HUB.x - half, y, half * 2 + 1, 1, t > 0.75 ? P.towerDark : P.tower);
           }
-          rect(HUB.x - Math.round(H / 22), HORIZON - 1, Math.round(H / 11), Math.max(1, Math.round(H / 75)), P.towerDark);
-          var nacW = Math.round(W * 0.078);
-          var nacH = Math.max(3, Math.round(H * 0.04));
+          rect(HUB.x - Math.round(SCENE_H / 16), HORIZON - 1, Math.round(SCENE_H / 8), Math.max(1, Math.round(SCENE_H / 60)), P.towerDark);
+          var nacW = Math.round(SCENE_H * 0.22);
+          var nacH = Math.max(3, Math.round(SCENE_H * 0.065));
           rect(HUB.x - nacW * 0.6, HUB.y - nacH / 2, nacW, nacH, P.blade);
           rect(HUB.x - nacW * 0.6, HUB.y + nacH / 6, nacW, nacH / 3, P.bladeDark);
           rect(HUB.x - 1, HUB.y - HUB_HALF - 1, HUB_HALF * 2 + 2, HUB_HALF * 2 + 2, P.tower);
@@ -383,25 +384,26 @@
           rect(HUB.x - HUB_HALF, HUB.y - HUB_HALF, HUB_HALF * 2 + 1, HUB_HALF * 2 + 1, P.towerDark);
         }
 
-        function drawStrip(nextHours) {
-          var shown = nextHours.slice(0, W >= 300 ? 12 : W >= 180 ? 10 : 8);
-          var barW = Math.max(2, Math.round(SCENE_W / (shown.length * 1.7)));
-          var gap = Math.max(1, Math.round(barW / 3));
-          var labelsUnder = W >= 300;
-          var baseline = H - (labelsUnder ? 11 : 3);
-          var maxH = Math.round(H * 0.12);
-          var x0 = Math.round(SCENE_W * 0.04);
-          text('NEXT 12 H', x0, baseline - maxH - GLYPH - 3, P.muted, 1);
+        /** The twelve-hour chart sits in the data area, spanning the full width of the screen. */
+        function drawStrip(nextHours, fromY) {
+          var shown = nextHours.slice(0, 12);
+          if (!shown.length) return;
+          var maxH = Math.round((H - SCENE_H) * 0.26);
+          var baseline = H - 2;
+          // No room between the readings and the bottom edge: at the chunkiest scale the picture and
+          // the headline number are the whole panel.
+          if (maxH < 6 || baseline - maxH < fromY + 2) return;
+          var label = 'NEXT 12 H';
+          var x0 = 6 + label.length * 6 + 8;
+          var avail = W - x0 - 6;
+          var gap = Math.max(1, Math.round(avail * 0.012));
+          var barW = Math.max(2, Math.floor((avail - gap * (shown.length - 1)) / shown.length));
+          text(label, 6, baseline - GLYPH, P.muted, 1);
           for (var i = 0; i < shown.length; i++) {
             var v = shown[i].v100;
             var h = finite(v) ? Math.max(1, Math.round((v / 16) * maxH)) : 1;
             var off = !finite(v) || v < TURBINE.cutInSpeed || v >= TURBINE.cutOutSpeed;
             rect(x0 + i * (barW + gap), baseline - h, barW, h, off ? P.muted : P.accent);
-          }
-          if (labelsUnder) {
-            for (var j = 0; j < shown.length; j++) {
-              text(String(new Date(shown[j].t).getHours()), x0 + j * (barW + gap), baseline + 3, P.muted, 1);
-            }
           }
         }
 
@@ -413,72 +415,56 @@
           nodata: ['NO DATA', 'warn']
         };
 
-        function drawReadout(s) {
-          var x = SCENE_W;
-          rect(x, 0, W - x, H, P.panelBg);
-          rect(x, 0, 1, H, P.panelLine);
-          var pad = 4;
-          var labelX = x + pad;
-          var y = Math.max(3, Math.round(H * 0.04));
+        /**
+         * The data block, full width under the picture. Row 1 is the state and the headline number,
+         * row 2 is four readings spread across the screen, and the twelve-hour chart runs along the
+         * bottom edge — so nothing is squeezed into a narrow column.
+         */
+        function drawData(s) {
+          var top = SCENE_H;
+          rect(0, top, W, H - top, P.panelBg);
+          rect(0, top, W, 1, P.panelLine);
+
+          var x = 6;
+          var y = top + 3;
+          var wide = W >= 180;
           var badge = BADGE[s.state] || BADGE.nodata;
           var badgeColour = P[badge[1]];
+          var badgeW = badge[0].length * 6 + 6;
 
-          if (W < 180) {
-            var badgeW = 3 * 6 + 5;
-            rect(labelX - 1, y, badgeW, GLYPH + 3, badgeColour);
-            text('GEN', labelX + 2, y + 1, '#06231a', 1);
-            y += GLYPH + 5;
-            var pairs = [
-              ['WIND', s.windText, P.accent],
-              ['DIR', s.dirText, P.text],
-              ['RPM', s.rpmText, P.text]
+          // --- row 1: state badge, headline wind, sample hour ---
+          rect(x - 1, y, badgeW, GLYPH + 4, badgeColour);
+          text(badge[0], x + 2, y + 2, '#06231a', 1);
+
+          var heroScale = wide ? 2 : 1;
+          var heroY = wide ? y : y + GLYPH + 5; // too narrow for the badge and the number side by side
+          var heroX = wide ? x + badgeW + Math.max(8, Math.round(W * 0.04)) : x;
+          var afterHero = text(s.windText, heroX, heroY, P.accent, heroScale);
+          var unitEnd = text('M/S', afterHero + 3, heroY + GLYPH * (heroScale - 1), P.muted, 1);
+          var hourW = s.hourText.length * 6 - 1;
+          if (W - 6 - hourW > unitEnd + 12) text(s.hourText, W - 6 - hourW, heroY + GLYPH * (heroScale - 1), P.muted, 1);
+
+          // --- row 2: the readings, four columns wide or one compact line when there is no room ---
+          var rowY = wide ? y + GLYPH * heroScale + 4 : heroY + GLYPH + 4;
+          var bottom = rowY + GLYPH;
+          if (wide) {
+            var cols = [
+              ['GUST', s.gustText],
+              ['DIR', s.dirText],
+              ['ROTOR', s.rpmText + ' RPM'],
+              ['POWER', s.powerText]
             ];
-            for (var p = 0; p < pairs.length; p++) {
-              text(pairs[p][0], labelX, y, P.muted, 1);
-              y += GLYPH + 1;
-              text(pairs[p][1], labelX, y, pairs[p][2], 1);
-              y += GLYPH + 3;
+            var colW = Math.floor((W - 12) / cols.length);
+            for (var i = 0; i < cols.length; i++) {
+              text(cols[i][0], x + i * colW, rowY, P.muted, 1);
+              text(cols[i][1], x + i * colW, rowY + GLYPH + 2, P.text, 1);
             }
-            return;
+            bottom = rowY + GLYPH * 2 + 2;
+          } else if (bottom + 2 <= H) {
+            text(s.dirText + ' ' + s.rpmText + 'RPM', x, rowY, P.text, 1);
           }
 
-          var badgeW2 = badge[0].length * 6 + 6;
-          rect(labelX - 1, y, badgeW2, GLYPH + 4, badgeColour);
-          text(badge[0], labelX + 2, y + 2, '#06231a', 1);
-          y += GLYPH + 4 + Math.max(3, Math.round(H / 40));
-
-          var valueX = labelX + 34;
-          text('WIND 100 M', labelX, y, P.muted, 1);
-          y += GLYPH + 1;
-          var afterX = text(s.windText, labelX, y, P.accent, 2);
-          text('M/S', afterX + 2, y + GLYPH, P.muted, 1);
-          y += GLYPH * 2 + Math.max(3, Math.round(H / 30));
-
-          var rows =
-            W >= 240
-              ? [
-                  ['GUST', s.gustText],
-                  ['DIR', s.dirText],
-                  ['ROTOR', s.rpmText + ' RPM'],
-                  ['POWER', s.powerText],
-                  ['HOUR', s.hourText]
-                ]
-              : [
-                  ['DIR', s.dirText],
-                  ['ROTOR', s.rpmText + ' RPM'],
-                  ['POWER', s.powerText]
-                ];
-          for (var i = 0; i < rows.length && y + GLYPH < H - 4; i++) {
-            text(rows[i][0], labelX, y, P.muted, 1);
-            text(rows[i][1], valueX, y, P.text, 1);
-            y += ROW;
-          }
-          if (W >= 240 && y + (GLYPH + 3) * 2 + GLYPH < H) {
-            y += 2;
-            text('COORD', labelX, y, P.muted, 1);
-            text(s.coordText, labelX, y + GLYPH + 3, P.text, 1);
-            text('MODELLED 2.5 MW', labelX, y + (GLYPH + 3) * 2, P.muted, 1);
-          }
+          drawStrip(nextHours(12), bottom);
         }
 
         // ---------------------------------------------------------------- state
@@ -679,6 +665,8 @@
           s.powerText = power(app.power);
           s.hourText = app.sample ? hourLabel(app.sample.t) : '--';
           s.coordText = app.lat === null ? '--' : app.lat.toFixed(4) + ' ' + app.lon.toFixed(4);
+          // Two decimals is plenty for a stamp on the picture, and it has to fit a chunky panel.
+          s.coordShort = app.lat === null ? '' : app.lat.toFixed(2) + ' ' + app.lon.toFixed(2);
           s.windTextMs = wind === null ? '--' : wind.toFixed(1) + ' M/S';
         }
 
@@ -723,14 +711,21 @@
           ctx.clearRect(0, 0, W, H);
           ctx.save();
           ctx.beginPath();
-          ctx.rect(0, 0, SCENE_W, H);
+          ctx.rect(0, 0, W, SCENE_H);
           ctx.clip();
           drawSky();
           drawField();
           drawTurbine(angle, narrow);
-          drawStrip(nextHours(W >= 180 ? 10 : 8));
+          // Attribution for the wind data, which Open-Meteo licenses CC BY 4.0, and the coordinate
+          // the panel is watching — kept as quiet stamps on the picture rather than rows of data.
+          var credit = W >= 180 ? 'OPEN-METEO CC BY 4.0' : 'OPEN-METEO';
+          var creditW = credit.length * 6 - 1;
+          if (creditW + 10 <= W) text(credit, W - 6 - creditW, SCENE_H - GLYPH - 2, P.muted, 1);
           ctx.restore();
-          drawReadout(s);
+          // Stamped only when it clears the tower, so it never runs under the machine.
+          var coord = W < 220 ? s.coordShort : s.coordText;
+          if (coord && 6 + coord.length * 6 + 3 < HUB.x - HUB_HALF) text(coord, 6, 4, P.muted, 1);
+          drawData(s);
         }
 
         function frame(now) {

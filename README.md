@@ -123,6 +123,13 @@ integer scale, so at `?px=4` every drawn pixel is exactly 4×4 screen pixels wit
 same page therefore renders identically on the Fire tablet, on a modern laptop, and quantised to a
 PNG for e-ink.
 
+The picture fills the top of the screen and the readings sit under it across the full width: the
+state and the headline wind speed on the first row, gust, direction, rotor speed and power as four
+columns below, and the twelve-hour forecast running along the bottom edge. Nothing is squeezed into
+a side column, so a 1024×600 screen reads at a glance. The coordinate and the Open-Meteo credit are
+quiet stamps on the picture, and the readings thin out by themselves on a chunky or narrow panel
+rather than colliding.
+
 ```
 https://kbottsson.github.io/wind-turbine-live/lite.html?coord=55.7047,13.1910&px=4
 ```
@@ -130,7 +137,7 @@ https://kbottsson.github.io/wind-turbine-live/lite.html?coord=55.7047,13.1910&px
 | Parameter | Effect |
 |---|---|
 | `?coord=lat,lon` | coordinate to watch (`?lat=&lon=` also accepted). Remembered in `localStorage` |
-| `?px=N` | pixel scale, integer: 2 is fine and detailed, 4 is the default, 8 is chunky. The scale decides how much of the readout fits — at ×8 only wind, direction and rotor speed remain |
+| `?px=N` | pixel scale, integer: 2 is fine and detailed, 4 is the default, 8 is chunky. The scale decides how much of the readout fits — at ×8 the picture, the state and the wind speed are the whole panel |
 | `?wind=8&dir=260` | demo: render a wind speed and direction with no network read |
 
 It reads the same Open-Meteo series at the same cadence as the 3D page (once an hour, re-read every
