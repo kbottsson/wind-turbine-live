@@ -142,8 +142,10 @@ https://kbottsson.github.io/wind-turbine-live/lite.html?coord=55.7047,13.1910&px
 
 It reads the same Open-Meteo series at the same cadence as the 3D page (once an hour, re-read every
 6), runs the same control law and cut-out hysteresis, and eases the rotor with the same 4 s time
-constant. The viewer stands due south and never moves: the machine does the moving, and the rotor
-disc foreshortens as the wind veers, so the panel still shows which way it is facing without any 3D.
+constant. The viewer stands due south and never moves: the machine does the moving. It yaws to face
+the wind — the nacelle swings left, right or end-on and the rotor sits upwind at the nose — and its
+disc foreshortens to a sliver when the wind blows across the view rather than at the viewer, so the
+panel shows which way the machine is facing with no 3D at all.
 
 ## What the numbers mean
 

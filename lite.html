@@ -264,6 +264,7 @@
         var SCENE_H = 92; // the picture band: full width, top of the screen
         var HORIZON = 74;
         var HUB = { x: 128, y: 33 };
+        var ROTOR_C = { x: 128, y: 33 }; // the rotor centre, at the nacelle's nose, upwind of the tower
         var ROTOR_R = 28;
         var HUB_HALF = 2;
 
@@ -280,6 +281,7 @@
           SCENE_H = Math.round(H * (W >= 380 ? 0.56 : 0.62));
           HORIZON = Math.round(SCENE_H * 0.8);
           HUB = { x: Math.round(W * 0.5), y: Math.round(SCENE_H * 0.36) };
+          ROTOR_C = { x: HUB.x, y: HUB.y };
           ROTOR_R = Math.round(SCENE_H * 0.3);
           HUB_HALF = Math.max(1, Math.round(SCENE_H / 50));
         }
@@ -342,32 +344,51 @@
           }
         }
 
-        function drawBlade(angleDeg, narrow, k) {
+        /**
+         * One blade of an elliptical rotor. The tip is projected the way a viewer really sees a
+         * yawed disc: the axis across the view foreshortens (f), the vertical axis does not — so a
+         * blade pointing at or away from the viewer shortens to a stub when the machine is side-on,
+         * instead of every blade thinning.
+         */
+        function drawBlade(angleDeg, f, k) {
           var a = (angleDeg * Math.PI) / 180;
-          var cos = Math.cos(a);
-          var sin = Math.sin(a);
-          var pts = [[-2.0, 0], [-2.8, -8], [-2.3, -18], [-1.5, -22], [1.5, -22], [2.3, -18], [2.8, -8], [2.0, 0]];
+          var tipX = ROTOR_C.x + Math.cos(a) * ROTOR_R * f;
+          var tipY = ROTOR_C.y - Math.sin(a) * ROTOR_R;
+          var dx = tipX - ROTOR_C.x;
+          var dy = tipY - ROTOR_C.y;
+          var len = Math.sqrt(dx * dx + dy * dy);
+          if (len < 1.5) len = 1.5;
+          var px = (-dy / len) * k;
+          var py = (dx / len) * k;
           ctx.beginPath();
-          for (var i = 0; i < pts.length; i++) {
-            var px = pts[i][0] * narrow * k;
-            var py = pts[i][1] * k;
-            var X = HUB.x + px * cos - py * sin;
-            var Y = HUB.y + px * sin + py * cos;
-            if (i === 0) ctx.moveTo(X, Y);
-            else ctx.lineTo(X, Y);
-          }
+          ctx.moveTo(ROTOR_C.x + px * 2.4, ROTOR_C.y + py * 2.4);
+          ctx.lineTo(tipX + px * 1.1, tipY + py * 1.1);
+          ctx.lineTo(tipX - px * 1.1, tipY - py * 1.1);
+          ctx.lineTo(ROTOR_C.x - px * 2.4, ROTOR_C.y - py * 2.4);
           ctx.closePath();
           ctx.fillStyle = P.blade;
           ctx.fill();
         }
 
-        /** The rotor disc foreshortens with the wind: square on looking straight up the axis. */
+        /** How wide the rotor disc looks: square on when the wind comes at the viewer, a sliver
+         *  when it blows across the view. */
         function narrowFor(windBearing) {
           var delta = ((windBearing - VIEWER_BEARING) * Math.PI) / 180;
           return 0.22 + 0.78 * Math.abs(Math.cos(delta));
         }
 
-        function drawTurbine(rotorAngle, narrow) {
+        /** Which way the nose points on screen: +1 right (east), -1 left (west), 0 at or away. */
+        function noseXFor(windBearing) {
+          return Math.sin((windBearing * Math.PI) / 180);
+        }
+
+        /**
+         * The machine yaws to face the wind, exactly as the 3D page does: the tower stays put and
+         * the nacelle swings, so a broadside wind has the nose pointing left or right along the
+         * screen and a wind off the viewer's shoulder leaves the machine end-on. The rotor sits at
+         * the nose, upwind of the tower, and its disc foreshortens with the yaw.
+         */
+        function drawTurbine(rotorAngle, narrow, noseX) {
           var k = ROTOR_R / 22;
           for (var y = HUB.y + 2; y <= HORIZON; y++) {
             var t = (y - HUB.y) / (HORIZON - HUB.y);
@@ -375,13 +396,22 @@
             rect(HUB.x - half, y, half * 2 + 1, 1, t > 0.75 ? P.towerDark : P.tower);
           }
           rect(HUB.x - Math.round(SCENE_H / 16), HORIZON - 1, Math.round(SCENE_H / 8), Math.max(1, Math.round(SCENE_H / 60)), P.towerDark);
+
           var nacW = Math.round(SCENE_H * 0.22);
           var nacH = Math.max(3, Math.round(SCENE_H * 0.065));
-          rect(HUB.x - nacW * 0.6, HUB.y - nacH / 2, nacW, nacH, P.blade);
-          rect(HUB.x - nacW * 0.6, HUB.y + nacH / 6, nacW, nacH / 3, P.bladeDark);
-          rect(HUB.x - 1, HUB.y - HUB_HALF - 1, HUB_HALF * 2 + 2, HUB_HALF * 2 + 2, P.tower);
+          var swing = Math.abs(noseX);
+          var dir = noseX < 0 ? -1 : 1;
+          var noseLen = Math.max(nacW * 0.22, swing * nacW); // a stub when the machine is end-on
+          var tailLen = Math.max(nacW * 0.12, swing * nacW * 0.45);
+          var xFrom = HUB.x - dir * tailLen;
+          var xTo = HUB.x + dir * noseLen;
+          ROTOR_C = { x: xTo, y: HUB.y };
+
+          rect(Math.min(xFrom, xTo), HUB.y - nacH / 2, Math.abs(xTo - xFrom), nacH, P.blade);
+          rect(Math.min(xFrom, xTo), HUB.y + nacH / 6, Math.abs(xTo - xFrom), nacH / 3, P.bladeDark);
+          rect(ROTOR_C.x - 1, HUB.y - HUB_HALF - 1, HUB_HALF * 2 + 2, HUB_HALF * 2 + 2, P.tower);
           for (var b = 0; b < TURBINE.bladeCount; b++) drawBlade(rotorAngle + b * (360 / TURBINE.bladeCount), narrow, k);
-          rect(HUB.x - HUB_HALF, HUB.y - HUB_HALF, HUB_HALF * 2 + 1, HUB_HALF * 2 + 1, P.towerDark);
+          rect(ROTOR_C.x - HUB_HALF, HUB.y - HUB_HALF, HUB_HALF * 2 + 1, HUB_HALF * 2 + 1, P.towerDark);
         }
 
         /** The twelve-hour chart sits in the data area, spanning the full width of the screen. */
@@ -708,6 +738,7 @@
           fillText(s);
           var windBearing = app.sample && finite(app.sample.dir) ? app.sample.dir : VIEWER_BEARING;
           var narrow = narrowFor(windBearing);
+          var noseX = noseXFor(windBearing);
           ctx.clearRect(0, 0, W, H);
           ctx.save();
           ctx.beginPath();
@@ -715,7 +746,7 @@
           ctx.clip();
           drawSky();
           drawField();
-          drawTurbine(angle, narrow);
+          drawTurbine(angle, narrow, noseX);
           // Attribution for the wind data, which Open-Meteo licenses CC BY 4.0, and the coordinate
           // the panel is watching — kept as quiet stamps on the picture rather than rows of data.
           var credit = W >= 180 ? 'OPEN-METEO CC BY 4.0' : 'OPEN-METEO';
