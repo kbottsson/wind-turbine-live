@@ -869,8 +869,10 @@
             app.rpm = st.rpm; // screenshots must not have to wait for the easing
             app.power = st.power;
             app.hours = demoHours(v, dir);
-            if (reducedMotion()) draw(app.angle);
-            else window.requestAnimationFrame(frame);
+            // Paint once now rather than waiting for the animation loop: a panel that depends on its
+            // first animation frame for its only paint can come up blank if the browser throttles it.
+            draw(app.angle);
+            if (!reducedMotion()) window.requestAnimationFrame(frame);
             return;
           }
 
@@ -886,6 +888,8 @@
           rememberCoord(coord.lat, coord.lon);
           draw(0);
           readWind(false);
+          // The initial draw above already put something on screen; the loop keeps it current from
+          // here, re-laying out the panel if the window changes.
           if (reducedMotion()) {
             window.setInterval(function () {
               draw(app.angle);
@@ -910,6 +914,10 @@
         // Older Android WebViews do not always fire resize on a rotation, so ask for both.
         window.addEventListener('orientationchange', function () {
           layout();
+        });
+        // Coming back into view after being hidden: paint at once rather than waiting for a heartbeat.
+        document.addEventListener('visibilitychange', function () {
+          if (!document.hidden) app.force = true;
         });
         start();
 
