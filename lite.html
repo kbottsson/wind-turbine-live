@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Live wind turbine — pixel panel</title>
     <meta
       name="description"
@@ -423,7 +423,7 @@
         function drawStrip(nextHours, fromY) {
           var shown = nextHours.slice(0, 12);
           if (!shown.length) return;
-          var maxH = Math.round((H - SCENE_H) * 0.22);
+          var maxH = chartHeight();
           var baseline = H - 2;
           // No room between the readings and the bottom edge: at the chunkiest scale the picture and
           // the headline number are the whole panel.
@@ -450,19 +450,37 @@
           nodata: ['NO DATA', 'warn']
         };
 
+        /** How tall the twelve-hour chart is on this framebuffer — the rows the readings must leave. */
+        function chartHeight() {
+          return Math.round((H - SCENE_H) * 0.22);
+        }
+
+        /** One block of readings: labels on top, values beneath, spread across the width. */
+        function drawReadings(cells, y) {
+          var colW = Math.floor((W - 12) / cells.length);
+          for (var i = 0; i < cells.length; i++) {
+            text(cells[i][0], 6 + i * colW, y, P.muted, 1);
+            text(cells[i][1], 6 + i * colW, y + GLYPH + 2, P.text, 1);
+          }
+          return y + GLYPH * 2 + 2;
+        }
+
         /**
-         * The data block, full width under the picture. Row 1 is the state and the headline number,
-         * row 2 is four readings spread across the screen, and the twelve-hour chart runs along the
-         * bottom edge — so nothing is squeezed into a narrow column.
+         * The data block, full width under the picture: the state and the headline number first, then
+         * the readings, then the twelve-hour chart along the bottom edge. Nothing is squeezed into a
+         * side column. The readings tier on the room available — four across a wide panel, two by two
+         * on a tall narrow one (a portrait panel has the height to spare), and a single line only
+         * when neither fits — so a rotation costs a layout, not a reading.
          */
-        function drawData(s) {
+        function drawData(s, stamped) {
           var top = SCENE_H;
           rect(0, top, W, H - top, P.panelBg);
           rect(0, top, W, 1, P.panelLine);
 
           var x = 6;
           var y = top + 2;
-          var wide = W >= 180;
+          var roomy = H - SCENE_H >= 44; // enough height for a tall number and worded labels
+          var wide = W >= 180; // enough width for four readings side by side
           var badge = BADGE[s.state] || BADGE.nodata;
           var badgeColour = P[badge[1]];
           var badgeW = badge[0].length * 6 + 6;
@@ -471,32 +489,42 @@
           rect(x - 1, y, badgeW, GLYPH + 4, badgeColour);
           text(badge[0], x + 2, y + 2, '#06231a', 1);
 
-          var heroScale = wide ? 2 : 1;
-          var heroY = wide ? y : y + GLYPH + 5; // too narrow for the badge and the number side by side
+          var heroScale = wide || roomy ? 2 : 1;
+          // A narrow panel stacks the number under the badge, clearing the badge box so a tall
+          // number cannot grow up into it.
+          var heroY = wide ? y : y + GLYPH + 6;
           var heroX = wide ? x + badgeW + Math.max(8, Math.round(W * 0.04)) : x;
           var afterHero = text(s.windText, heroX, heroY, P.accent, heroScale);
           var unitEnd = text('M/S', afterHero + 3, heroY + GLYPH * (heroScale - 1), P.muted, 1);
           var hourW = s.hourText.length * 6 - 1;
           if (W - 6 - hourW > unitEnd + 12) text(s.hourText, W - 6 - hourW, heroY + GLYPH * (heroScale - 1), P.muted, 1);
 
-          // --- row 2: the readings, four columns wide or one compact line when there is no room ---
-          var rowY = wide ? y + GLYPH * heroScale + 3 : heroY + GLYPH + 4;
+          // --- row 2: the readings ---
+          var rowY = (wide ? y : heroY) + GLYPH * heroScale + 3;
+          var cells = [
+            ['GUST', s.gustText],
+            ['DIR', s.dirText],
+            ['ROTOR', s.rpmText + ' RPM'],
+            ['POWER', s.powerText]
+          ];
           var bottom = rowY + GLYPH;
           if (wide) {
-            var cols = [
-              ['GUST', s.gustText],
-              ['DIR', s.dirText],
-              ['ROTOR', s.rpmText + ' RPM'],
-              ['POWER', s.powerText]
-            ];
-            var colW = Math.floor((W - 12) / cols.length);
-            for (var i = 0; i < cols.length; i++) {
-              text(cols[i][0], x + i * colW, rowY, P.muted, 1);
-              text(cols[i][1], x + i * colW, rowY + GLYPH + 2, P.text, 1);
-            }
-            bottom = rowY + GLYPH * 2 + 2;
-          } else if (bottom + 2 <= H) {
+            bottom = drawReadings(cells, rowY);
+          } else if (rowY + GLYPH * 4 + 4 <= H - 2 - chartHeight()) {
+            bottom = drawReadings(cells.slice(0, 2), rowY);
+            bottom = drawReadings(cells.slice(2), bottom + 2);
+          } else if (rowY + GLYPH + 2 <= H) {
             text(s.dirText + ' ' + s.rpmText + 'RPM', x, rowY, P.text, 1);
+          }
+
+          // --- the watched coordinate, only when the picture had no room to stamp it, and only if
+          //     it does not cost the chart its rows ---
+          if (!stamped) {
+            var lineY = bottom + 4;
+            if (lineY + GLYPH + 1 <= H - 2 - chartHeight()) {
+              text(s.coordShort, x, lineY, P.muted, 1);
+              bottom = lineY + GLYPH;
+            }
           }
 
           drawStrip(nextHours(12), bottom);
@@ -758,10 +786,12 @@
           var creditW = credit.length * 6 - 1;
           if (creditW + 10 <= W) text(credit, W - 6 - creditW, SCENE_H - GLYPH - 2, P.muted, 1);
           ctx.restore();
-          // Stamped only when it clears the tower, so it never runs under the machine.
+          // Stamped only when it clears the tower, so it never runs under the machine; otherwise the
+          // data block can adopt it, if it has the rows to spare.
           var coord = W < 220 ? s.coordShort : s.coordText;
-          if (coord && 6 + coord.length * 6 + 3 < HUB.x - HUB_HALF) text(coord, 6, 4, P.muted, 1);
-          drawData(s);
+          var stamped = !!coord && 6 + coord.length * 6 + 3 < HUB.x - HUB_HALF;
+          if (stamped) text(coord, 6, 4, P.muted, 1);
+          drawData(s, stamped);
         }
 
         function frame(now) {
@@ -829,6 +859,10 @@
         }
 
         window.addEventListener('resize', function () {
+          layout();
+        });
+        // Older Android WebViews do not always fire resize on a rotation, so ask for both.
+        window.addEventListener('orientationchange', function () {
           layout();
         });
         start();

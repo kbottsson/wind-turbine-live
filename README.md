@@ -141,6 +141,11 @@ a row of data, so the data block keeps its space and the turbine gives ground. T
 the 1024×600 panel the tablet has: at `?px=4` the framebuffer is 256×150 and each drawn pixel is
 exactly 4×4 screen pixels.
 
+Neither orientation is assumed. Landscape is the intended shape — the picture tops the screen and the
+readings run the full width, four across — but the same page re-lays out on rotation: portrait keeps
+the picture on top and stacks the readings two by two, because a tall panel has the height to spare.
+The readings drop to fewer columns only when the room genuinely is not there.
+
 | Parameter | Effect |
 |---|---|
 | `?coord=lat,lon` | coordinate to watch (`?lat=&lon=` also accepted). Remembered in `localStorage` |
