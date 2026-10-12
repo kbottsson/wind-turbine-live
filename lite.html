@@ -261,6 +261,7 @@
         var W = 256;
         var H = 150;
         var GLYPH = 7;
+        var RAD_TO_DEG = 180 / Math.PI; // the shared model works in radians; the pixel panel draws degrees
         var SCENE_H = 92; // the picture band: full width, top of the screen
         var HORIZON = 74;
         var HUB = { x: 128, y: 33 };
@@ -785,7 +786,9 @@
           ctx.clip();
           drawSky();
           drawField();
-          drawTurbine(angle, narrow, noseX);
+          // The model's angle is radians; the blades are drawn in degrees. Converting here rather than
+          // in the model keeps the panel's maths identical to the 3D page's.
+          drawTurbine(angle * RAD_TO_DEG, narrow, noseX);
           // Attribution for the wind data, which Open-Meteo licenses CC BY 4.0, and the coordinate
           // the panel is watching — kept as quiet stamps on the picture rather than rows of data.
           var credit = W >= 180 ? 'OPEN-METEO CC BY 4.0' : 'OPEN-METEO';
@@ -812,9 +815,28 @@
         var PAINT_HEARTBEAT_MS = 60000; // then just often enough to keep the canvas on screen
         var SETTLE_WINDOW_MS = 10000;
 
-        function frame(now) {
-          window.requestAnimationFrame(frame);
-          var dt = app.lastFrame ? Math.min((now - app.lastFrame) / 1000, 0.1) : 0;
+        // The loop is driven by a plain timer rather than requestAnimationFrame: a kiosk WebView can
+        // suspend rAF outright (Fully Kiosk on Fire OS did), which froze the rotor while the readings
+        // still refreshed on the hour. The rotor also integrates the real elapsed time between ticks,
+        // so the machine turns at the right speed even when the browser renders only a few frames a
+        // second — and the timer costs fewer wake-ups than a 60 Hz animation loop did.
+        var TICK_MS = 100; // the web view only has to keep up with a rotor at 8-ish rpm
+        var WAKE_CLAMP_S = 2; // if ticks were skipped, catch the rotation up rather than losing it
+
+        function startLoop() {
+          window.setInterval(function () {
+            frame();
+          }, TICK_MS);
+        }
+
+        function frame(nowArg) {
+          var now =
+            typeof nowArg === 'number'
+              ? nowArg
+              : window.performance && performance.now
+                ? performance.now()
+                : Date.now();
+          var dt = app.lastFrame ? Math.min((now - app.lastFrame) / 1000, WAKE_CLAMP_S) : 0;
           app.lastFrame = now;
           app.rpm = easeTowards(app.rpm, app.targetRpm, dt, 4.0);
           var turning = app.rpm > 0.05 || app.targetRpm > 0.05;
@@ -833,7 +855,7 @@
 
           var s = {};
           fillText(s);
-          var sig = [s.state, s.windText, s.gustText, s.dirText, s.rpmText, s.powerText, s.hourText, app.angle.toFixed(1)].join('|');
+          var sig = [s.state, s.windText, s.gustText, s.dirText, s.rpmText, s.powerText, s.hourText, (app.angle * RAD_TO_DEG).toFixed(1)].join('|');
           var changed = sig !== app.lastSignature;
           var settled = now - app.loadedAt < SETTLE_WINDOW_MS;
           var due = turning
@@ -872,7 +894,7 @@
             // Paint once now rather than waiting for the animation loop: a panel that depends on its
             // first animation frame for its only paint can come up blank if the browser throttles it.
             draw(app.angle);
-            if (!reducedMotion()) window.requestAnimationFrame(frame);
+            if (!reducedMotion()) startLoop();
             return;
           }
 
@@ -895,7 +917,7 @@
               draw(app.angle);
             }, 10000);
           } else {
-            window.requestAnimationFrame(frame);
+            startLoop();
           }
         }
 

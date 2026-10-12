@@ -151,6 +151,13 @@ picture is repainted at a fixed slow cadence rather than once per animation fram
 machine drops to a heartbeat of one paint a minute. Measured over ten seconds driven at 60 Hz: 600
 paints before, 102 while turning, and about ten a minute while parked.
 
+The loop is driven by a timer, not `requestAnimationFrame`, and the rotor integrates the real elapsed
+time between ticks. A kiosk WebView can suspend animation frames outright — Fully Kiosk on Fire OS
+did — which left the panel repainting only when a new hourly reading arrived. One unit trap is worth
+knowing about too: the shared model works in radians (the 3D page hands them to three.js) while the
+pixel panel draws blade angles in degrees, and the conversion happens at the drawing call. Getting
+that wrong is not a subtle error — the rotor turns 57× too slowly, which reads as standing still.
+
 | Parameter | Effect |
 |---|---|
 | `?coord=lat,lon` | coordinate to watch (`?lat=&lon=` also accepted). Remembered in `localStorage` |
