@@ -141,10 +141,15 @@ a row of data, so the data block keeps its space and the turbine gives ground. T
 the 1024×600 panel the tablet has: at `?px=4` the framebuffer is 256×150 and each drawn pixel is
 exactly 4×4 screen pixels.
 
-Neither orientation is assumed. Landscape is the intended shape — the picture tops the screen and the
+Neither orientation is assumed. Landscape is the design target — the picture tops the screen and the
 readings run the full width, four across — but the same page re-lays out on rotation: portrait keeps
 the picture on top and stacks the readings two by two, because a tall panel has the height to spare.
 The readings drop to fewer columns only when the room genuinely is not there.
+
+The wall panel itself runs **portrait** in the end (two by two): that is the owner's preference on
+sight, and the tablet is locked to it (`accelerometer_rotation 0`, `user_rotation 0`) so a nudge or a
+reboot cannot quietly hand over the other layout. Landscape remains the intended shape for a wide
+screen and is fully supported — it is simply not the one on the wall.
 
 The panel is also written to be cheap to leave running: the rotor is the only thing that moves, so the
 picture is repainted at a fixed slow cadence rather than once per animation frame, and a stopped
