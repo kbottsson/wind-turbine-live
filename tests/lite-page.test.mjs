@@ -43,7 +43,8 @@ function liteModel() {
   const build = new Function(
     `${block}
      return { TURBINE, RATED_WIND_SPEED, RPM_RATED, STATE, rpmForWind, powerForWind,
-              rotorStateForWind, easeTowards, advanceAngle, paintIntervalMs, nextRetryMs, sampleHourly, msUntilNextHour };`,
+              rotorStateForWind, easeTowards, advanceAngle, paintIntervalMs, nextRetryMs, sampleHourly, msUntilNextHour,
+              SCENES, SCENE_KEYS, SEASONS, PHASES, PHASE_WINDOW_MIN, seasonFor, solarEvents, phaseFor, sceneFor };`,
   );
   return build();
 }
@@ -234,4 +235,122 @@ test('a failed read is retried, backing off but never giving up', () => {
   assert.ok(html.includes('scheduleRetry();'), 'a failed read schedules a retry');
   assert.ok(html.includes('app.retryMs = nextRetryMs(app.retryMs)'), 'the retry backoff is used');
   assert.ok(html.includes('app.retryMs = 0'), 'a clean read resets the backoff');
+});
+
+// ---------------------------------------------------------------------------
+// the picture follows the season and the sun
+// ---------------------------------------------------------------------------
+
+const HEX = /^#[0-9a-f]{6}$/i;
+
+test('every scene is complete, and every colour is a colour', () => {
+  for (const season of lite.SEASONS) {
+    assert.ok(lite.SCENES[season], `no scenes for ${season}`);
+    for (const phase of lite.PHASES) {
+      const scene = lite.SCENES[season][phase];
+      assert.ok(scene, `${season}.${phase} is missing`);
+      for (const key of lite.SCENE_KEYS) {
+        assert.ok(key in scene, `${season}.${phase} has no ${key}`);
+      }
+      assert.ok(Array.isArray(scene.sky) && scene.sky.length >= 3, `${season}.${phase} needs a sky ramp`);
+      for (const stop of scene.sky) assert.match(stop, HEX, `${season}.${phase} sky stop ${stop}`);
+      for (const key of lite.SCENE_KEYS) {
+        if (key === 'sky') continue;
+        if (key === 'stars') {
+          assert.ok(
+            typeof scene.stars === 'number' && scene.stars >= 0 && scene.stars <= 1,
+            `${season}.${phase} stars is a density between 0 and 1`,
+          );
+        } else {
+          assert.match(scene[key], HEX, `${season}.${phase} ${key} is not a colour`);
+        }
+      }
+      // A day scene full of stars, or a night scene without any, is a mistake a reader sees at once.
+      if (phase === 'day') assert.equal(scene.stars, 0, `${season}.day should have no stars`);
+      if (phase === 'night') assert.equal(scene.stars, 1, `${season}.night should be full of stars`);
+    }
+  }
+  assert.equal(lite.SEASONS.length * lite.PHASES.length, 16, 'four seasons by four phases');
+  assert.ok(!('fixed' in lite.SCENES), 'the panel\'s own palette is a fallback, not a scene');
+});
+
+test('the season is a month, not a guess', () => {
+  const at = (m) => lite.seasonFor(new Date(2026, m, 15));
+  assert.equal(at(0), 'winter');
+  assert.equal(at(1), 'winter');
+  assert.equal(at(11), 'winter');
+  assert.equal(at(2), 'spring');
+  assert.equal(at(4), 'spring');
+  assert.equal(at(5), 'summer');
+  assert.equal(at(7), 'summer');
+  assert.equal(at(8), 'autumn');
+  assert.equal(at(10), 'autumn');
+  const seen = new Set([...Array(12).keys()].map(at));
+  assert.deepEqual([...seen].sort(), ['autumn', 'spring', 'summer', 'winter'], 'all four seasons occur');
+});
+
+test('sunrise and sunset come from the coordinate, so the day length follows the season', () => {
+  const CEST = 7200; // a fixed offset, so the assertions do not depend on this machine's timezone
+  const LUND = [55.7047, 13.191];
+  const dayHours = (lat, lon, m, d) => {
+    const ev = lite.solarEvents(lat, lon, new Date(2026, m, d), CEST);
+    assert.ok(ev, `no solar events for ${lat},${lon}`);
+    return (ev.sunset - ev.sunrise) / 60;
+  };
+  const midsummer = dayHours(...LUND, 5, 21);
+  const midwinter = dayHours(...LUND, 11, 21);
+  const equinox = dayHours(...LUND, 2, 20);
+  assert.ok(midsummer > 16.5 && midsummer < 18.5, `Lund midsummer day is ${midsummer.toFixed(2)} h`);
+  assert.ok(midwinter > 6.5 && midwinter < 7.5, `Lund midwinter day is ${midwinter.toFixed(2)} h`);
+  assert.ok(Math.abs(equinox - 12) < 0.5, `Lund equinox day is ${equinox.toFixed(2)} h`);
+  assert.ok(midsummer > equinox && equinox > midwinter, 'the year runs winter, equinox, summer');
+  // The equator barely notices the seasons; past the circle there is no sunrise to place a phase on.
+  for (const [m, d] of [[5, 21], [11, 21]]) {
+    const eq = dayHours(0, 13.191, m, d);
+    assert.ok(Math.abs(eq - 12) < 0.5, `equator day is ${eq.toFixed(2)} h`);
+  }
+  assert.equal(lite.solarEvents(78.22, 15.63, new Date(2026, 5, 21), CEST), null, 'Svalbard midsummer: no sunset');
+  assert.equal(lite.solarEvents(78.22, 15.63, new Date(2026, 11, 21), CEST), null, 'Svalbard midwinter: no sunrise');
+  // Fifteen degrees of longitude is an hour of solar time.
+  const east = lite.solarEvents(55.7047, 28.191, new Date(2026, 5, 21), CEST).sunrise;
+  const west = lite.solarEvents(55.7047, 13.191, new Date(2026, 5, 21), CEST).sunrise;
+  assert.ok(Math.abs(east - west + 60) < 1, `15 degrees east is an hour earlier (got ${(east - west).toFixed(1)} min)`);
+});
+
+test('the four phases hang off sunrise and sunset, with a clock fallback under a polar sky', () => {
+  const W = lite.PHASE_WINDOW_MIN;
+  assert.ok(W > 0 && W < 180, 'dawn and dusk are windows, not half the day');
+  const ev = { sunrise: 300, sunset: 1200 };
+  assert.equal(lite.phaseFor(300, ev), 'dawn');
+  assert.equal(lite.phaseFor(300 - W, ev), 'dawn');
+  assert.equal(lite.phaseFor(300 + W - 1, ev), 'dawn');
+  assert.equal(lite.phaseFor(300 + W, ev), 'day');
+  assert.equal(lite.phaseFor(1200 - W - 1, ev), 'day');
+  assert.equal(lite.phaseFor(1200, ev), 'dusk');
+  assert.equal(lite.phaseFor(1200 + W - 1, ev), 'dusk');
+  assert.equal(lite.phaseFor(240, ev), 'night');
+  assert.equal(lite.phaseFor(0, ev), 'night');
+  // No solar events means polar day or night, which must fall back to the clock, never to no scene.
+  const fallback = [[120, 'night'], [360, 'dawn'], [720, 'day'], [1140, 'dusk'], [1380, 'night']];
+  for (const [minute, want] of fallback) {
+    assert.equal(lite.phaseFor(minute, null), want, `clock fallback at ${minute} min`);
+  }
+});
+
+test('sceneFor pairs a season with a phase, and the panel keeps its own palette by default', () => {
+  const picked = lite.sceneFor(new Date(2026, 0, 15, 12, 0), 55.7047, 13.191);
+  assert.equal(picked.season, 'winter');
+  assert.equal(picked.phase, 'day');
+  assert.equal(picked.scene, lite.SCENES.winter.day);
+  const night = lite.sceneFor(new Date(2026, 6, 15, 1, 0), 55.7047, 13.191);
+  assert.equal(night.season, 'summer');
+  assert.equal(night.phase, 'night');
+  // The seasonal look is opt-in: until it is asked for, the panel draws its original palette.
+  assert.ok(html.includes("q.get('scene')"), '?scene= is read');
+  assert.ok(html.includes('?scene=auto'), 'the parameter is documented in the page');
+  assert.ok(html.includes('sceneKey: \'fixed\''), 'the panel starts on its own fixed palette');
+  assert.ok(html.includes('scene: null,'), 'which is to say, on no scene at all');
+  assert.ok(html.includes('app.scene = picked ? picked.scene : null'), 'and falls back to it');
+  assert.ok(html.includes('var sc = app.scene || P;'), 'both the sky and the field read the scene');
+  assert.equal(html.split('var sc = app.scene || P;').length - 1, 2, 'sky and field both read it');
 });

@@ -11,7 +11,7 @@ below the rated speed, flat above it, and stopped outside the operating range.
 repository on every push to `main`, so the site cannot drift from the code.
 
 ```
-npm test              # 88 unit tests for the coordinate parser, control law, motion and panels
+npm test              # 96 unit tests for the coordinate parser, control law, motion and panels
 ./run.sh              # serve locally at http://localhost:8080/
 ./scripts/shots.sh    # render + assert every UI state in headless Chrome
 ```
@@ -169,6 +169,19 @@ that wrong is not a subtle error — the rotor turns 57× too slowly, which read
 | `?px=N` | pixel scale, integer: 2 is fine and detailed, 4 is the default, 8 is chunky. The scale decides how much of the readout fits — at ×8 the picture, the state and the wind speed are the whole panel |
 | `?wind=8&dir=260` | demo: render a wind speed and direction with no network read |
 | `?motion=off` | park the rotor for a still panel or a static render (an e-ink PNG). Nothing else stops the machine: the platform's reduce-motion preference only slows the painting (12 → 4 a second) and never stops the rotor |
+| `?scene=auto` | the picture follows the season and the sun at the watched coordinate: sixteen palettes, one per season × time of day |
+| `?scene=winter.dawn` | force one scene (`winter\|spring\|summer\|autumn` × `night\|dawn\|day\|dusk`) — how the preview sheet is rendered |
+
+The picture is the only thing the season changes. The machine, the readout and its background keep their
+colours, so a reading never becomes harder to read because of the sky behind it. The phase comes from the
+sun at the watched coordinate — dawn and dusk are ninety minutes centred on sunrise and sunset — so a
+Lund December has a short day and a midsummer night barely arrives. Above the Arctic Circle, where the
+sun may not cross the horizon at all, the four phases fall back to fixed clock buckets rather than to no
+scene at all. `scripts/scene-sheet.sh` renders all sixteen side by side.
+
+`?scene=auto` is **opt-in**: with no parameter the panel keeps the single palette it has always had, so
+moving the wall panel onto the seasonal look is a deliberate change rather than something that happened
+to it.
 
 It reads the same Open-Meteo series at the same cadence as the 3D page (once an hour, re-read every
 6), runs the same control law and cut-out hysteresis, and eases the rotor with the same 4 s time
@@ -259,6 +272,7 @@ src/main.js           wiring: input → data → control law → 3D + HUD, hourl
 tests/                node --test unit tests for src/wind-model.js, src/framing.js and lite.html
 scripts/smoke-api.mjs live API check for a land, ocean and offshore coordinate
 scripts/shots.sh      renders and asserts every UI state in headless Chrome, plus the lite states
+scripts/scene-sheet.sh  renders the sixteen season × time-of-day palettes into one sheet to judge by eye
 ```
 
 To model a different machine, change `TURBINE` in `src/config.js` — the geometry, the control law,
@@ -267,7 +281,7 @@ from the physics. Three.js is loaded from a CDN (pinned), not vendored, by decis
 
 ## What has been verified, and how
 
-- `npm test` — 88 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
+- `npm test` — 96 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
   range rejection, junk), the control law against computed reference values, cut-out hysteresis,
   hourly sampling and clamping, the motion maths (rotor easing, yaw slew, angle integration), the
   framing and compass maths (the tower base and the topmost blade tip both inside the frame, with

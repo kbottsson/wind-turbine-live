@@ -26,6 +26,8 @@
         ?px=N                    pixel scale, integer, default 4
         ?wind=8&dir=260          demo: render a wind speed and direction with no network read
         ?motion=off              park the rotor: for a static render (an e-ink PNG) or a still panel
+        ?scene=auto              the picture follows the season and the sun at the coordinate
+        ?scene=winter.dawn       force one scene (winter|spring|summer|autumn x night|dawn|day|dusk)
 
       The rotor always turns — driven by a timer, and slowed rather than stopped when the platform
       asks for less motion, because that preference is derived from the device's animation scale and
@@ -195,6 +197,117 @@
           return Math.min(doubled, RETRY_MAX_MS);
         }
 
+        // ---------------------------------------------------------------- scenes
+        // The picture changes with the season and the time of day. Only the *world* changes: the
+        // machine, the readout and its background keep their own colours so a reading never becomes
+        // harder to read because of the sky behind it. Sixteen palettes, chosen from the date and the
+        // sun rather than from any live weather, and switched hard — no crossfade, no interpolation
+        // between months.
+        var SCENE_KEYS = ['sky', 'horizon', 'cloud', 'star', 'stars', 'hillFar', 'ground', 'groundDark', 'groundLight'];
+        var SEASONS = ['winter', 'spring', 'summer', 'autumn'];
+        var PHASES = ['night', 'dawn', 'day', 'dusk'];
+        var PHASE_WINDOW_MIN = 45; // dawn and dusk each last 90 minutes, centred on sunrise/sunset
+
+        var SCENES = {
+          winter: {
+            night: { sky: ['#070f18', '#0a141f', '#0d1a26', '#122232', '#16293c'], horizon: '#20364c', cloud: '#243a4f', star: '#587896', stars: 1, hillFar: '#26343a', ground: '#3a4750', groundDark: '#2e3a44', groundLight: '#4a5866' },
+            dawn: { sky: ['#101a2b', '#24304a', '#4a4a68', '#7d6f82', '#b09a9a'], horizon: '#c0a6a0', cloud: '#6b5f70', star: '#7d8fa8', stars: 0.4, hillFar: '#2a363c', ground: '#454f57', groundDark: '#38424b', groundLight: '#59646d' },
+            day: { sky: ['#5f7f9e', '#7f9dba', '#9db8cf', '#b8cfe0', '#cfdfe9'], horizon: '#e6eef2', cloud: '#e8f0f4', star: '#9fb4c4', stars: 0, hillFar: '#4a5a5e', ground: '#8f9fa8', groundDark: '#7d8d97', groundLight: '#a9b8c0' },
+            dusk: { sky: ['#101a2b', '#2a2a44', '#4c3c55', '#75535f', '#a3797c'], horizon: '#c08f84', cloud: '#5d4a58', star: '#708aa2', stars: 0.5, hillFar: '#333f45', ground: '#48525b', groundDark: '#3b454e', groundLight: '#5d6870' }
+          },
+          spring: {
+            night: { sky: ['#0a1521', '#0e1d2c', '#132736', '#183142', '#1e3b50'], horizon: '#2e4b60', cloud: '#2b4155', star: '#4d6b85', stars: 1, hillFar: '#243528', ground: '#2f4234', groundDark: '#273729', groundLight: '#3a503d' },
+            dawn: { sky: ['#16202f', '#2a3049', '#4a4460', '#7a6272', '#b08a86'], horizon: '#c9a08f', cloud: '#6a5a6b', star: '#6d84a0', stars: 0.4, hillFar: '#2c3a2c', ground: '#3a4a36', groundDark: '#31402e', groundLight: '#4a5c44' },
+            day: { sky: ['#4f7fa8', '#6f9cc0', '#8fb8d4', '#aed0e2', '#c8e2ee'], horizon: '#e4f0f2', cloud: '#f0f6f8', star: '#a8c0d0', stars: 0, hillFar: '#3f5440', ground: '#4a6440', groundDark: '#40583a', groundLight: '#5f7d50' },
+            dusk: { sky: ['#1a2334', '#323049', '#544460', '#7f6272', '#a9868a'], horizon: '#c29a8c', cloud: '#5c4c5e', star: '#6a82a0', stars: 0.5, hillFar: '#33422f', ground: '#3f4f38', groundDark: '#364531', groundLight: '#4f6244' }
+          },
+          summer: {
+            night: { sky: ['#08131c', '#0b1a26', '#0f2230', '#132c3c', '#17364a'], horizon: '#274a63', cloud: '#254158', star: '#4a6b88', stars: 1, hillFar: '#1f3320', ground: '#2a3d26', groundDark: '#22331f', groundLight: '#35492e' },
+            dawn: { sky: ['#1b2436', '#3a3550', '#6b4f63', '#a26b6a', '#d59a7e'], horizon: '#e0b48f', cloud: '#8a6470', star: '#7b90aa', stars: 0.35, hillFar: '#2a3f26', ground: '#34492b', groundDark: '#2b3d24', groundLight: '#405831' },
+            day: { sky: ['#3f7fb8', '#63a0cc', '#8cbfdc', '#b3d8e8', '#d3ebf2'], horizon: '#eef7f7', cloud: '#ffffff', star: '#b0c8d8', stars: 0, hillFar: '#3a5c33', ground: '#3f6a32', groundDark: '#35592b', groundLight: '#527f40' },
+            dusk: { sky: ['#1d2438', '#3e3550', '#5f4a5e', '#8f6a6a', '#c08c78'], horizon: '#d8a184', cloud: '#634b58', star: '#72889f', stars: 0.5, hillFar: '#2e4429', ground: '#36502c', groundDark: '#2d4325', groundLight: '#456334' }
+          },
+          autumn: {
+            night: { sky: ['#0b1219', '#101a24', '#14222d', '#192b38', '#1e3544'], horizon: '#334c5e', cloud: '#2e3d4d', star: '#4f6d88', stars: 1, hillFar: '#33291f', ground: '#3d3122', groundDark: '#332818', groundLight: '#4a3b28' },
+            dawn: { sky: ['#1c1e2c', '#3a3143', '#654a4c', '#9a6c50', '#c99a63'], horizon: '#d9b078', cloud: '#7d5c45', star: '#7a86a0', stars: 0.4, hillFar: '#3d3220', ground: '#4a3b24', groundDark: '#3e311c', groundLight: '#5b492c' },
+            day: { sky: ['#5b84a0', '#7ba0b8', '#9cbacb', '#bdd3dd', '#d8e6e8'], horizon: '#eadfc6', cloud: '#f2ece0', star: '#b4c4cc', stars: 0, hillFar: '#5d5031', ground: '#6d5a33', groundDark: '#5c4b2b', groundLight: '#856f42' },
+            dusk: { sky: ['#211f2e', '#453348', '#6b4750', '#a06258', '#cf8b60'], horizon: '#e0a068', cloud: '#6d4a45', star: '#76889e', stars: 0.5, hillFar: '#4a3a24', ground: '#57452a', groundDark: '#4a3a23', groundLight: '#6a5533' }
+          }
+        };
+
+        /** Season by month: Dec–Feb winter, Mar–May spring, Jun–Aug summer, Sep–Nov autumn. */
+        function seasonFor(when) {
+          var m = when.getMonth();
+          if (m <= 1 || m === 11) return 'winter';
+          if (m <= 4) return 'spring';
+          if (m <= 7) return 'summer';
+          return 'autumn';
+        }
+
+        /**
+         * Sunrise and sunset for a coordinate, in minutes after local midnight, by the standard
+         * sunrise equation — accurate to a couple of minutes, which is far finer than a 90-minute
+         * phase window needs. Returns null when the sun never crosses the horizon (polar day or
+         * night), which is not an error: the four phases then fall back to the clock.
+         */
+        function solarEvents(lat, lon, when, utcOffsetSeconds) {
+          if (!finite(lat) || !finite(lon)) return null;
+          var rad = Math.PI / 180;
+          var year = when.getFullYear();
+          var days = Math.floor((Date.UTC(year, when.getMonth(), when.getDate()) - Date.UTC(year, 0, 1)) / 86400000);
+          var gamma = ((2 * Math.PI) / 365) * days;
+          var eqtime =
+            229.18 *
+            (0.000075 +
+              0.001868 * Math.cos(gamma) -
+              0.032077 * Math.sin(gamma) -
+              0.014615 * Math.cos(2 * gamma) -
+              0.040849 * Math.sin(2 * gamma));
+          var decl =
+            0.006918 -
+            0.399912 * Math.cos(gamma) +
+            0.070257 * Math.sin(gamma) -
+            0.006758 * Math.cos(2 * gamma) +
+            0.000907 * Math.sin(2 * gamma) -
+            0.002697 * Math.cos(3 * gamma) +
+            0.00148 * Math.sin(3 * gamma);
+          var cosHa = Math.cos(90.833 * rad) / (Math.cos(lat * rad) * Math.cos(decl)) - Math.tan(lat * rad) * Math.tan(decl);
+          if (cosHa > 1 || cosHa < -1) return null;
+          var ha = Math.acos(cosHa) / rad;
+          var offsetMin = finite(utcOffsetSeconds) ? utcOffsetSeconds / 60 : -when.getTimezoneOffset();
+          return {
+            sunrise: 720 - 4 * (lon + ha) - eqtime + offsetMin,
+            sunset: 720 - 4 * (lon - ha) - eqtime + offsetMin
+          };
+        }
+
+        /** Fixed clock buckets, used only where the sun does not define a day. */
+        function clockPhase(minutes) {
+          if (minutes < 5 * 60) return 'night';
+          if (minutes < 7 * 60) return 'dawn';
+          if (minutes < 18 * 60) return 'day';
+          if (minutes < 20 * 60) return 'dusk';
+          return 'night';
+        }
+
+        function phaseFor(minutes, ev) {
+          if (!ev) return clockPhase(minutes);
+          // The windows tile the day exactly — every minute belongs to one phase, and a boundary
+          // minute belongs to the phase it is opening. Overlapping them or leaving a gap meant the
+          // panel could show night for the single minute at sunrise + 45.
+          if (minutes >= ev.sunrise - PHASE_WINDOW_MIN && minutes < ev.sunrise + PHASE_WINDOW_MIN) return 'dawn';
+          if (minutes >= ev.sunrise + PHASE_WINDOW_MIN && minutes < ev.sunset - PHASE_WINDOW_MIN) return 'day';
+          if (minutes >= ev.sunset - PHASE_WINDOW_MIN && minutes < ev.sunset + PHASE_WINDOW_MIN) return 'dusk';
+          return 'night';
+        }
+
+        /** Which scene the panel should be drawing right now. */
+        function sceneFor(when, lat, lon, utcOffsetSeconds) {
+          var season = seasonFor(when);
+          var phase = phaseFor(when.getHours() * 60 + when.getMinutes(), solarEvents(lat, lon, when, utcOffsetSeconds));
+          return { season: season, phase: phase, scene: SCENES[season][phase] };
+        }
+
         function sampleHourly(hours, when) {
           if (!hours || !hours.length) return null;
           var t = when instanceof Date ? when.getTime() : Number(when);
@@ -228,6 +341,7 @@
           horizon: '#35566f',
           cloud: '#2b4155',
           star: '#4d6b85',
+          stars: 1, // how dense the starfield is; a scene overrides this (0 by day)
           hillFar: '#22322c',
           ground: '#2b3a32',
           groundDark: '#232f29',
@@ -354,39 +468,42 @@
         }
 
         function drawSky() {
+          var sc = app.scene || P; // the scene's world, or the panel's original fixed palette
           var bands = Math.max(3, Math.round(SCENE_H / 16));
           var bandH = Math.ceil(HORIZON / bands);
           for (var i = 0; i < bands; i++) {
             var t = i / (bands - 1);
-            rect(0, i * bandH, W, bandH, P.sky[Math.min(P.sky.length - 1, Math.round(t * (P.sky.length - 1)))]);
+            rect(0, i * bandH, W, bandH, sc.sky[Math.min(sc.sky.length - 1, Math.round(t * (sc.sky.length - 1)))]);
           }
-          var n = Math.round((W * HORIZON) / 1400);
+          // Stars scale with the phase: full at night, a few at dawn and dusk, none by day.
+          var n = Math.round((W * HORIZON * (sc.stars === undefined ? 1 : sc.stars)) / 1400);
           for (var s = 0; s < n; s++) {
-            rect((s * 37 + 11) % W, (s * 53 + 7) % Math.max(2, Math.round(HORIZON * 0.85)), 1, 1, P.star);
+            rect((s * 37 + 11) % W, (s * 53 + 7) % Math.max(2, Math.round(HORIZON * 0.85)), 1, 1, sc.star);
           }
           var cw = Math.round(W * 0.2);
           var cloudH = Math.max(2, SCENE_H / 34);
-          rect(W * 0.06, SCENE_H * 0.28 + 2, cw, cloudH, P.cloud);
-          rect(W * 0.06 + cw * 0.15, SCENE_H * 0.28, cw * 0.7, cloudH, P.cloud);
-          rect(W * 0.62, SCENE_H * 0.18 + 2, cw * 0.8, cloudH, P.cloud);
-          rect(W * 0.62 + cw * 0.1, SCENE_H * 0.18, cw * 0.5, cloudH, P.cloud);
-          rect(0, HORIZON - 1, W, 1, P.horizon);
+          rect(W * 0.06, SCENE_H * 0.28 + 2, cw, cloudH, sc.cloud);
+          rect(W * 0.06 + cw * 0.15, SCENE_H * 0.28, cw * 0.7, cloudH, sc.cloud);
+          rect(W * 0.62, SCENE_H * 0.18 + 2, cw * 0.8, cloudH, sc.cloud);
+          rect(W * 0.62 + cw * 0.1, SCENE_H * 0.18, cw * 0.5, cloudH, sc.cloud);
+          rect(0, HORIZON - 1, W, 1, sc.horizon);
         }
 
         function drawField() {
-          rect(0, HORIZON, W, SCENE_H - HORIZON, P.ground);
-          rect(0, HORIZON, W, Math.max(1, Math.round(SCENE_H / 34)), P.groundDark);
-          for (var x = 0; x < W; x += 3) rect(x, HORIZON - 2, 2, 2, P.hillFar);
+          var sc = app.scene || P;
+          rect(0, HORIZON, W, SCENE_H - HORIZON, sc.ground);
+          rect(0, HORIZON, W, Math.max(1, Math.round(SCENE_H / 34)), sc.groundDark);
+          for (var x = 0; x < W; x += 3) rect(x, HORIZON - 2, 2, 2, sc.hillFar);
           var farX = Math.round(W * 0.86);
           var farH = Math.round(SCENE_H * 0.17);
           rect(farX, HORIZON - farH, 1, farH, P.towerDark);
           rect(farX - Math.round(SCENE_H * 0.045), HORIZON - Math.round(SCENE_H * 0.08), 1, 1, P.towerDark);
           rect(farX + Math.round(SCENE_H * 0.045), HORIZON - Math.round(SCENE_H * 0.06), 1, 1, P.towerDark);
           var b = Math.round((SCENE_H - HORIZON) / 3);
-          for (var i = 1; i <= 2; i++) rect(0, HORIZON + b * i, W, 1, P.groundDark);
+          for (var i = 1; i <= 2; i++) rect(0, HORIZON + b * i, W, 1, sc.groundDark);
           var tufts = Math.round(W / 6);
           for (var g = 0; g < tufts; g++) {
-            rect(3 + ((g * 13) % (W - 6)), HORIZON + 4 + ((g * 7) % Math.max(2, SCENE_H - HORIZON - 6)), 1, 1, P.groundLight);
+            rect(3 + ((g * 13) % (W - 6)), HORIZON + 4 + ((g * 7) % Math.max(2, SCENE_H - HORIZON - 6)), 1, 1, sc.groundLight);
           }
         }
 
@@ -591,6 +708,9 @@
           loadedAt: 0,
           force: true,
           retryMs: 0,
+          scene: null,
+          sceneKey: 'fixed',
+          sceneAt: 0,
           // Both are chosen in start(): what the rotor does, and how often it is painted, depend on
           // the platform's motion preference and on ?motion=off.
           still: false,
@@ -927,6 +1047,7 @@
           var turning = app.rpm > 0.05 || app.targetRpm > 0.05;
           var animating = turning && !app.still;
           if (animating) app.angle = advanceAngle(app.angle, app.rpm, dt);
+          updateScene(now, false); // cheap: re-derived once a minute, and forces a paint if it changed
 
           // Cheap gates first, so an idle panel does almost no work per tick at all. A page the browser
           // reports as hidden is painted rarely rather than never: a kiosk panel that is wrong about
@@ -981,6 +1102,34 @@
           return still === '1' || still === 'true' || still === 'yes';
         }
 
+        /**
+         * Which scene the panel should draw. `?scene=auto` follows the calendar and the sun at the
+         * watched coordinate; `?scene=winter.dawn` forces one, which is how the preview sheet is
+         * rendered; anything else — including no parameter at all — keeps the panel's original fixed
+         * palette, so the seasonal look stays opt-in until its owner has seen it on a wall.
+         */
+        function sceneFromParam(when) {
+          var want = String(q.get('scene') || '').toLowerCase();
+          if (want === 'auto' || want === 'on') return sceneFor(when, app.lat, app.lon);
+          var parts = want.split('.');
+          if (parts.length === 2 && SEASONS.indexOf(parts[0]) >= 0 && PHASES.indexOf(parts[1]) >= 0) {
+            return { season: parts[0], phase: parts[1], scene: SCENES[parts[0]][parts[1]] };
+          }
+          return null;
+        }
+
+        /** Re-derive the scene at most once a minute, and force a paint when it actually changes. */
+        function updateScene(now, force) {
+          if (!force && now - app.sceneAt < 60000) return;
+          app.sceneAt = now;
+          var picked = sceneFromParam(new Date());
+          var key = picked ? picked.season + '.' + picked.phase : 'fixed';
+          if (key === app.sceneKey && !force) return;
+          app.sceneKey = key;
+          app.scene = picked ? picked.scene : null;
+          app.force = true;
+        }
+
         function start() {
           layout();
           app.loadedAt = clockMs();
@@ -1003,6 +1152,7 @@
             app.rpm = st.rpm; // screenshots must not have to wait for the easing
             app.power = st.power;
             app.hours = demoHours(v, dir);
+            updateScene(clockMs(), true);
             // Paint once now rather than waiting for the animation loop: a panel that depends on its
             // first animation frame for its only paint can come up blank if the browser throttles it.
             draw(app.angle);
@@ -1020,6 +1170,7 @@
           app.lat = coord.lat;
           app.lon = coord.lon;
           rememberCoord(coord.lat, coord.lon);
+          updateScene(clockMs(), true);
           draw(0);
           readWind(false);
           // The initial draw above already put something on screen; the loop keeps it current from
