@@ -163,6 +163,7 @@ that wrong is not a subtle error — the rotor turns 57× too slowly, which read
 | `?coord=lat,lon` | coordinate to watch (`?lat=&lon=` also accepted). Remembered in `localStorage` |
 | `?px=N` | pixel scale, integer: 2 is fine and detailed, 4 is the default, 8 is chunky. The scale decides how much of the readout fits — at ×8 the picture, the state and the wind speed are the whole panel |
 | `?wind=8&dir=260` | demo: render a wind speed and direction with no network read |
+| `?motion=off` | park the rotor for a still panel or a static render (an e-ink PNG). Nothing else stops the machine: the platform's reduce-motion preference only slows the painting (12 → 4 a second) and never stops the rotor |
 
 It reads the same Open-Meteo series at the same cadence as the 3D page (once an hour, re-read every
 6), runs the same control law and cut-out hysteresis, and eases the rotor with the same 4 s time

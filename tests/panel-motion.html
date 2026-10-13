@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>panel motion check</title>
+    <style>
+      body {
+        font: 13px/1.4 ui-monospace, monospace;
+        margin: 8px;
+      }
+      iframe {
+        border: 1px solid #999;
+        width: 512px;
+        height: 300px;
+      }
+      #result {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The rotor's motion, measured rather than eyeballed.
+
+      lite.html paints into a canvas, so nothing in its DOM says whether the blades turned, and no
+      single screenshot can prove they did. This harness loads the panel in an iframe, samples the
+      rotor's drawn angle and the panel's paint count, waits, samples again, and writes the result
+      into its own DOM so `--dump-dom` can be read back and asserted on.
+
+      scripts/panel-motion-check.mjs drives it twice — once with --force-prefers-reduced-motion — and
+      fails unless the rotor turned both times. That is the failure it exists for: a platform
+      preference, or a clock, that stops the panel painting while its readings still update.
+
+      ?page=<url> picks what to load, so the harness can also be pointed at a revision that is
+      expected to be frozen (the check proves itself that way).
+    -->
+    <iframe id="panel" title="the panel under test"></iframe>
+    <pre id="result">PENDING</pre>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        var frameEl = document.getElementById('panel');
+        var resultEl = document.getElementById('result');
+        var first = null;
+        var attempts = 0;
+
+        var target = params.get('page') || 'lite.html?px=2&wind=8&dir=260';
+        // The panel is served from the site root, while this harness lives in tests/ — so a page
+        // named relative to the site ('lite.html?...') has to be rooted, or the iframe loads a 404.
+        if (target.charAt(0) !== '/' && !/^[a-z]+:\/\//i.test(target)) target = '/' + target;
+        frameEl.src = target;
+
+        function snapshot() {
+          var w = frameEl.contentWindow;
+          var app = w && w.__wtLite && w.__wtLite.app;
+          if (!app) return null;
+          return {
+            degrees: app.angle * (180 / Math.PI),
+            paints: app.paints,
+            rpm: app.rpm,
+            still: app.still,
+            movingMs: app.paintMovingMs,
+            reduced: !!(w.matchMedia && w.matchMedia('(prefers-reduced-motion: reduce)').matches),
+            hidden: !!w.document.hidden
+          };
+        }
+
+        function sample(delay) {
+          window.setTimeout(function () {
+            var s = snapshot();
+            if (!s) {
+              // The panel has not booted yet: wait rather than report a phantom failure.
+              if (attempts++ < 20) return sample(250);
+              resultEl.textContent = 'panel-motion {"error":"panel never booted"}';
+              return;
+            }
+            if (!first) {
+              first = s;
+              return sample(1400);
+            }
+            resultEl.textContent =
+              'panel-motion ' +
+              JSON.stringify({
+                first: first,
+                second: s,
+                moved: s.degrees - first.degrees,
+                painted: s.paints - first.paints
+              });
+          }, delay);
+        }
+
+        sample(900);
+      })();
+    </script>
+  </body>
+</html>

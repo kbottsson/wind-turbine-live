@@ -43,7 +43,7 @@ function liteModel() {
   const build = new Function(
     `${block}
      return { TURBINE, RATED_WIND_SPEED, RPM_RATED, STATE, rpmForWind, powerForWind,
-              rotorStateForWind, easeTowards, advanceAngle, sampleHourly, msUntilNextHour };`,
+              rotorStateForWind, easeTowards, advanceAngle, paintIntervalMs, nextRetryMs, sampleHourly, msUntilNextHour };`,
   );
   return build();
 }
@@ -162,4 +162,76 @@ test('the panel reads the same data source as the 3D page', () => {
   assert.ok(html.includes('wind_speed_100m,wind_direction_10m,wind_gusts_10m'), 'the same hourly vars');
   assert.ok(html.includes('wind_speed_unit=ms'), 'wind in m/s');
   assert.ok(html.includes('timeformat=unixtime'), 'unambiguous timestamps');
+});
+
+// ---------------------------------------------------------------------------
+// the paint cadence never becomes "paint never again"
+// ---------------------------------------------------------------------------
+
+test('the paint cadence never becomes "paint never again"', () => {
+  const cadences = { movingMs: 1000 / 12, settleMs: 1000, heartbeatMs: 60000, hiddenMs: 60000 };
+  // A turning rotor is painted on the moving cadence, a parked one on the heartbeat, and the first
+  // seconds after loading get the settle cadence while the first reading is still arriving.
+  assert.equal(lite.paintIntervalMs({ ...cadences, turning: true, settled: true }), cadences.movingMs);
+  assert.equal(lite.paintIntervalMs({ ...cadences, turning: false, settled: true }), cadences.settleMs);
+  assert.equal(lite.paintIntervalMs({ ...cadences, turning: false, settled: false }), cadences.heartbeatMs);
+  // Hidden means "rarely", never "never": a kiosk panel the browser wrongly calls hidden — which is
+  // what a wall panel looks like from inside — must still come back.
+  assert.equal(lite.paintIntervalMs({ ...cadences, turning: true, hidden: true }), cadences.hiddenMs);
+  assert.equal(lite.paintIntervalMs({ ...cadences, turning: false, hidden: true }), cadences.hiddenMs);
+  assert.equal(lite.paintIntervalMs(), cadences.heartbeatMs, 'no options at all still paints');
+  // Junk in any slot falls back to the heartbeat rather than to a cadence that stops the panel.
+  for (const junk of [undefined, null, NaN, 0, -1, Infinity, 'soon']) {
+    for (const slot of ['movingMs', 'settleMs', 'heartbeatMs', 'hiddenMs']) {
+      const got = lite.paintIntervalMs({ ...cadences, turning: true, [slot]: junk });
+      assert.ok(Number.isFinite(got) && got > 0, `${slot}=${String(junk)} gave ${String(got)}`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// the loop always starts, and motion is slowed rather than stopped
+// ---------------------------------------------------------------------------
+
+test('the loop always starts, and motion is slowed rather than stopped', () => {
+  // Read the page's own source here on purpose: the failure being guarded is a *shape* of code — the
+  // reduce-motion preference replacing the loop with an occasional redraw — and the panel's DOM cannot
+  // express it. The behavioural half of this lives in scripts/panel-motion-check.mjs.
+  assert.ok(!html.includes('if (reducedMotion()) {'), 'reduce motion must not swap the loop for a redraw');
+  assert.ok(!html.includes('}, 10000);'), 'no ten-second redraw remains');
+  assert.ok(!html.includes('if (!reducedMotion()) startLoop();'), 'the loop is not gated on the preference');
+  assert.ok(
+    html.includes('app.paintMovingMs = reducedMotion() ? PAINT_REDUCED_MS : PAINT_MOVING_MS'),
+    'reduce motion picks the slower cadence instead',
+  );
+  assert.ok(html.includes('var PAINT_REDUCED_MS = 1000 / 4;'), 'the slower cadence is a real cadence');
+  // Parking the rotor is something the page is asked to do, never something it falls into.
+  assert.ok(html.includes('app.still = motionOff();'), 'only ?motion=off parks the rotor');
+  assert.ok(html.includes("q.get('motion')"), '?motion= is read');
+  assert.equal(html.split('startLoop();').length - 1, 2, 'both the demo and the live path start the loop');
+});
+
+// ---------------------------------------------------------------------------
+// a failed read is retried, not fatal
+// ---------------------------------------------------------------------------
+
+test('a failed read is retried, backing off but never giving up', () => {
+  const first = lite.nextRetryMs(0);
+  assert.ok(first > 0 && first <= 60000, `the first retry is prompt (got ${String(first)} ms)`);
+  let ms = first;
+  const seen = [];
+  for (let i = 0; i < 12; i += 1) {
+    ms = lite.nextRetryMs(ms);
+    seen.push(ms);
+  }
+  assert.ok(seen.every((v) => Number.isFinite(v) && v > 0), 'every delay is a real delay');
+  assert.ok(seen[seen.length - 1] <= 3600000, 'the backoff stays within the hour');
+  assert.equal(seen[seen.length - 1], seen[seen.length - 2], 'and it does stop growing');
+  assert.equal(lite.nextRetryMs(undefined), first, 'junk falls back to the first delay');
+  assert.equal(lite.nextRetryMs(NaN), first, 'NaN falls back to the first delay');
+  // Scheduling the next read only on success was the bug: a panel that booted before its network came
+  // up — the normal case after a power cut — never tried again and sat on NO DATA for ever.
+  assert.ok(html.includes('scheduleRetry();'), 'a failed read schedules a retry');
+  assert.ok(html.includes('app.retryMs = nextRetryMs(app.retryMs)'), 'the retry backoff is used');
+  assert.ok(html.includes('app.retryMs = 0'), 'a clean read resets the backoff');
 });

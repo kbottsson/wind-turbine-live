@@ -25,6 +25,11 @@
         ?coord=52.5200,13.4050   coordinate to watch (?lat=&lon= also works)
         ?px=N                    pixel scale, integer, default 4
         ?wind=8&dir=260          demo: render a wind speed and direction with no network read
+        ?motion=off              park the rotor: for a static render (an e-ink PNG) or a still panel
+
+      The rotor always turns — driven by a timer, and slowed rather than stopped when the platform
+      asks for less motion, because that preference is derived from the device's animation scale and
+      says nothing about whether this panel's owner wants a still picture. ?motion=off says so.
 
       The rotor is drawn at the real rotor speed, and the rotor disc foreshortens as the wind veers
       — the viewer stands due south, so a wind from the south shows the disc square on, and a wind
@@ -153,6 +158,41 @@
           if (!finite(angle) || !(dt > 0)) return angle || 0;
           var safeRpm = finite(rpm) ? Math.max(rpm, 0) : 0;
           return angle + (safeRpm / 60) * TAU * dt;
+        }
+
+        /**
+         * How long the panel must wait between paints: the moving cadence while the rotor turns, the
+         * settle cadence for the first seconds after loading, and the heartbeat while the machine is
+         * parked. A browser that calls a wall panel hidden gets one paint a minute rather than none —
+         * a kiosk panel that stopped painting because of a wrong answer here would look like a crash —
+         * and any cadence that is not a usable positive number falls back to the heartbeat instead of
+         * to no painting at all.
+         */
+        function paintIntervalMs(opts) {
+          var o = opts || {};
+          var ms = o.turning ? o.movingMs : o.settled ? o.settleMs : o.heartbeatMs;
+          if (o.hidden) ms = Math.max(ms, o.hiddenMs);
+          if (!(ms > 0) || !finite(ms)) {
+            ms = o.heartbeatMs > 0 && finite(o.heartbeatMs) ? o.heartbeatMs : 60000;
+          }
+          return ms;
+        }
+
+        /** How quickly a failed read is retried: prompt at first, since the usual cause is a panel
+         *  that booted before its network came up, then backing off without ever giving up. */
+        var RETRY_FIRST_MS = 15000; // 15 s
+        var RETRY_MAX_MS = 15 * 60000; // 15 min
+
+        /**
+         * How long to wait before re-reading the wind after a failure. Quick at first, because the
+         * common case by far is a panel that booted before its network came up — a wall panel behind a
+         * power cut — and it should recover on its own rather than sit on NO DATA until someone
+         * notices. Then it backs off, but never stops trying: the one thing worse than showing nothing
+         * is showing nothing for ever.
+         */
+        function nextRetryMs(previous) {
+          var doubled = finite(previous) && previous > 0 ? previous * 2 : RETRY_FIRST_MS;
+          return Math.min(doubled, RETRY_MAX_MS);
         }
 
         function sampleHourly(hours, when) {
@@ -549,7 +589,12 @@
           lastSignature: '',
           paints: 0,
           loadedAt: 0,
-          force: true
+          force: true,
+          retryMs: 0,
+          // Both are chosen in start(): what the rotor does, and how often it is painted, depend on
+          // the platform's motion preference and on ?motion=off.
+          still: false,
+          paintMovingMs: 0
         };
 
         function coordFromUrl() {
@@ -700,6 +745,19 @@
           }, delay);
         }
 
+        /**
+         * A failed read must not be the end of the panel. The boot fetch fails whenever the tablet
+         * comes up before its network does — the normal case after a power cut — and without a retry
+         * the panel would show NO DATA until someone reloaded it by hand.
+         */
+        function scheduleRetry() {
+          window.clearTimeout(scheduleRetry.timer);
+          app.retryMs = nextRetryMs(app.retryMs);
+          scheduleRetry.timer = window.setTimeout(function () {
+            readWind(false);
+          }, app.retryMs);
+        }
+
         function readWind(background) {
           fetchWind(app.lat, app.lon, function (result) {
             if (result.error) {
@@ -711,9 +769,12 @@
                 app.sample = null;
                 app.state = STATE.NODATA;
                 app.note = result.message;
+                app.force = true; // show the failure now rather than at the next cadence tick
               }
+              scheduleRetry();
               return;
             }
+            app.retryMs = 0; // a clean read resets the backoff
             app.hours = result.hours;
             app.hoursReadAt = Date.now();
             app.note = '';
@@ -811,8 +872,10 @@
         // frame rate it used to run at. This is the panel's own power cost, and for something left on
         // a wall all day it is worth keeping near zero.
         var PAINT_MOVING_MS = 1000 / 12; // while the rotor turns
+        var PAINT_REDUCED_MS = 1000 / 4; // when the platform asks for less motion: slower, not stopped
         var PAINT_SETTLE_MS = 1000; // while stopped, for the first few seconds after loading
         var PAINT_HEARTBEAT_MS = 60000; // then just often enough to keep the canvas on screen
+        var PAINT_HIDDEN_MS = 60000; // a page the browser calls hidden is painted rarely, not never
         var SETTLE_WINDOW_MS = 10000;
 
         // The loop is driven by a plain timer rather than requestAnimationFrame: a kiosk WebView can
@@ -823,60 +886,109 @@
         var TICK_MS = 100; // the web view only has to keep up with a rotor at 8-ish rpm
         var WAKE_CLAMP_S = 2; // if ticks were skipped, catch the rotation up rather than losing it
 
+        /** The panel's clock: the same timeline as an animation frame's stamp, and the wall clock
+         *  where `performance` is missing. */
+        function clockMs() {
+          if (window.performance && typeof window.performance.now === 'function') return window.performance.now();
+          return Date.now();
+        }
+
+        /** Everything that can change on screen, so a new reading is painted the moment it arrives
+         *  instead of waiting out the heartbeat, and an unchanged panel is not painted at all. */
+        function signature(s) {
+          return [
+            s.state,
+            s.windText,
+            s.gustText,
+            s.dirText,
+            s.rpmText,
+            s.powerText,
+            s.hourText,
+            (app.angle * RAD_TO_DEG).toFixed(1)
+          ].join('|');
+        }
+
         function startLoop() {
           window.setInterval(function () {
-            frame();
+            frame(null);
           }, TICK_MS);
         }
 
+        /**
+         * One tick of the loop. The timer supplies no stamp, so the clock is read here; a caller that
+         * already has one — a screenshot harness — can hand it in. Nothing below may depend on where
+         * it came from.
+         */
         function frame(nowArg) {
-          var now =
-            typeof nowArg === 'number'
-              ? nowArg
-              : window.performance && performance.now
-                ? performance.now()
-                : Date.now();
+          var now = typeof nowArg === 'number' ? nowArg : clockMs();
           var dt = app.lastFrame ? Math.min((now - app.lastFrame) / 1000, WAKE_CLAMP_S) : 0;
           app.lastFrame = now;
           app.rpm = easeTowards(app.rpm, app.targetRpm, dt, 4.0);
           var turning = app.rpm > 0.05 || app.targetRpm > 0.05;
-          if (turning) app.angle = advanceAngle(app.angle, app.rpm, dt);
-          if (document.hidden) return; // nobody can see it: stop painting entirely
+          var animating = turning && !app.still;
+          if (animating) app.angle = advanceAngle(app.angle, app.rpm, dt);
 
-          // Cheap gates first, so an idle panel does almost no work per animation frame at all.
+          // Cheap gates first, so an idle panel does almost no work per tick at all. A page the browser
+          // reports as hidden is painted rarely rather than never: a kiosk panel that is wrong about
+          // being hidden would otherwise stand frozen on a wall, and one paint a minute costs nothing.
           var sincePaint = now - app.lastPaint;
-          if (!app.force) {
-            if (turning) {
-              if (sincePaint < PAINT_MOVING_MS) return;
-            } else if (sincePaint < 500) {
-              return; // nothing on a stopped panel can change faster than this
-            }
-          }
-
+          var interval = paintIntervalMs({
+            turning: animating,
+            settled: now - app.loadedAt < SETTLE_WINDOW_MS,
+            hidden: !!document.hidden,
+            movingMs: app.paintMovingMs,
+            settleMs: PAINT_SETTLE_MS,
+            heartbeatMs: PAINT_HEARTBEAT_MS,
+            hiddenMs: PAINT_HIDDEN_MS
+          });
           var s = {};
-          fillText(s);
-          var sig = [s.state, s.windText, s.gustText, s.dirText, s.rpmText, s.powerText, s.hourText, (app.angle * RAD_TO_DEG).toFixed(1)].join('|');
-          var changed = sig !== app.lastSignature;
-          var settled = now - app.loadedAt < SETTLE_WINDOW_MS;
-          var due = turning
-            ? sincePaint >= PAINT_MOVING_MS
-            : sincePaint >= (settled ? PAINT_SETTLE_MS : PAINT_HEARTBEAT_MS);
-          if (!app.force && !due && !(changed && sincePaint >= PAINT_SETTLE_MS)) return;
+          var haveValues = false;
+          if (!app.force && sincePaint < interval) {
+            // Not due yet, but a reading can arrive at any moment: look before waiting the heartbeat
+            // out. Nothing on a stopped panel can change faster than half a second, so that is the
+            // floor at which looking is worth its cost.
+            if (sincePaint < 500) return;
+            fillText(s);
+            haveValues = true;
+            if (signature(s) === app.lastSignature) return;
+          }
+          if (!haveValues) fillText(s);
 
           app.force = false;
           app.lastPaint = now;
-          app.lastSignature = sig;
+          app.lastSignature = signature(s);
           app.paints++;
           draw(app.angle);
         }
 
+        /**
+         * The platform's "reduce motion" preference. It is a weaker signal than it looks: Chromium
+         * derives it from the platform's animation scale, so any device with its UI animations
+         * switched off reports it — which is how this panel first hung on a wall with its blades
+         * frozen while the readings kept updating on the hour. It is therefore read as "turn the rotor
+         * more slowly", never as "stop turning it".
+         */
         function reducedMotion() {
-          return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        }
+
+        /** ?motion=off parks the rotor outright — for a static render (an e-ink PNG) or a panel whose
+         *  owner wants it still. Nothing else stops the machine. */
+        function motionOff() {
+          var m = String(q.get('motion') || '').toLowerCase();
+          if (m === 'off' || m === 'none' || m === 'still' || m === 'false' || m === '0') return true;
+          var still = String(q.get('still') || '').toLowerCase();
+          return still === '1' || still === 'true' || still === 'yes';
         }
 
         function start() {
           layout();
-          app.loadedAt = window.performance && performance.now ? performance.now() : Date.now();
+          app.loadedAt = clockMs();
+          // What the rotor does, and how often the panel is painted, is settled once here: a platform
+          // asking for less motion slows it down, and only ?motion=off stops it. The loop always
+          // starts — a panel whose rotor cannot turn has to be asked for, never stumbled into.
+          app.still = motionOff();
+          app.paintMovingMs = reducedMotion() ? PAINT_REDUCED_MS : PAINT_MOVING_MS;
           var demo = q.get('wind');
           if (demo !== null && demo !== '') {
             var v = parseFloat(demo);
@@ -894,7 +1006,7 @@
             // Paint once now rather than waiting for the animation loop: a panel that depends on its
             // first animation frame for its only paint can come up blank if the browser throttles it.
             draw(app.angle);
-            if (!reducedMotion()) startLoop();
+            startLoop();
             return;
           }
 
@@ -912,13 +1024,7 @@
           readWind(false);
           // The initial draw above already put something on screen; the loop keeps it current from
           // here, re-laying out the panel if the window changes.
-          if (reducedMotion()) {
-            window.setInterval(function () {
-              draw(app.angle);
-            }, 10000);
-          } else {
-            startLoop();
-          }
+          startLoop();
         }
 
         function demoHours(v, dir) {
