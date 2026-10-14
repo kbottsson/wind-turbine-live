@@ -183,6 +183,19 @@ scene at all. `scripts/scene-sheet.sh` renders all sixteen side by side.
 moving the wall panel onto the seasonal look is a deliberate change rather than something that happened
 to it.
 
+Two assumptions are worth stating plainly, because both are the kind that go unnoticed once the panel is
+on a wall:
+
+- **The picture is drawn as if the viewer is facing north.** The 3D page fixes the viewer due south of
+  the machine (`viewAzimuthDeg: 180`) and the pixel panel follows it: a 90° bearing puts the nacelle's
+  nose to the right and 270° to the left, which is what a north-facing viewer sees. Mounted on a south
+  wall the compass reads mirrored, with east on the left — a one-line sign change in the nacelle's swing.
+- **The seasons assume the northern hemisphere.** The sunrise equation itself is hemisphere-agnostic and
+  signed latitude is handled correctly — it reproduces Sydney's short June day as readily as Lund's long
+  one — but `seasonFor()` is month-based, so a panel watching a southern machine would show winter in
+  June while its skies said otherwise. The dawn/dusk glow is painted symmetrically along the horizon, so
+  the picture never claims which side the sun is on.
+
 It reads the same Open-Meteo series at the same cadence as the 3D page (once an hour, re-read every
 6), runs the same control law and cut-out hysteresis, and eases the rotor with the same 4 s time
 constant. The viewer stands due south and never moves: the machine does the moving. It yaws to face

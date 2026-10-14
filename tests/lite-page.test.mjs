@@ -315,6 +315,18 @@ test('sunrise and sunset come from the coordinate, so the day length follows the
   const east = lite.solarEvents(55.7047, 28.191, new Date(2026, 5, 21), CEST).sunrise;
   const west = lite.solarEvents(55.7047, 13.191, new Date(2026, 5, 21), CEST).sunrise;
   assert.ok(Math.abs(east - west + 60) < 1, `15 degrees east is an hour earlier (got ${(east - west).toFixed(1)} min)`);
+  // The sun is indifferent to hemispheres and the signed latitude gets that right: Sydney's shortest
+  // day is 21 June, and the equation returns it. The *season* mapping is another matter — it is
+  // month-based on purpose (hard switches, no interpolation) and therefore assumes the north, so a
+  // panel pointed at a southern machine would show winter in June.
+  const sydney = lite.solarEvents(-33.87, 151.21, new Date(2026, 5, 21), 36000);
+  assert.ok(sydney, 'a southern coordinate still has a sunrise');
+  const sydneyJune = (sydney.sunset - sydney.sunrise) / 60;
+  assert.ok(Math.abs(sydneyJune - 9.9) < 0.5, `Sydney's June day is ${sydneyJune.toFixed(2)} h`);
+  const sydneyDecember = lite.solarEvents(-33.87, 151.21, new Date(2026, 11, 21), 36000);
+  assert.ok((sydneyDecember.sunset - sydneyDecember.sunrise) / 60 > sydneyJune + 3, 'and its days lengthen in December');
+  assert.ok(midsummer / sydneyJune > 1.6, 'the two hemispheres are opposite in June');
+  assert.equal(lite.seasonFor(new Date(2026, 5, 21)), 'summer', 'the season mapping itself is northern');
 });
 
 test('the four phases hang off sunrise and sunset, with a clock fallback under a polar sky', () => {
