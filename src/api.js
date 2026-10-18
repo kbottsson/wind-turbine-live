@@ -81,6 +81,7 @@ function normalise(payload) {
   const hourly = payload && payload.hourly;
   if (!hourly || !Array.isArray(hourly.time)) return null;
   const speed = hourly.wind_speed_100m || [];
+  const near = hourly.wind_speed_10m || [];
   const dir = hourly.wind_direction_10m || [];
   const gust = hourly.wind_gusts_10m || [];
   const numeric = (value) => (Number.isFinite(value) ? value : null);
@@ -88,6 +89,7 @@ function normalise(payload) {
   return hourly.time.map((seconds, i) => ({
     t: seconds * 1000,
     v100: numeric(speed[i]),
+    v10: numeric(near[i]),
     dir: numeric(dir[i]),
     gust: numeric(gust[i]),
   }));

@@ -44,7 +44,8 @@ function liteModel() {
     `${block}
      return { TURBINE, RATED_WIND_SPEED, RPM_RATED, STATE, rpmForWind, powerForWind,
               rotorStateForWind, easeTowards, advanceAngle, paintIntervalMs, nextRetryMs, sampleHourly, msUntilNextHour,
-              SCENES, SCENE_KEYS, SEASONS, PHASES, PHASE_WINDOW_MIN, seasonFor, solarEvents, phaseFor, sceneFor };`,
+              SCENES, SCENE_KEYS, SEASONS, PHASES, PHASE_WINDOW_MIN, seasonFor, solarEvents, phaseFor, sceneFor,
+              FLAG, flagColumn, flagPhaseRate };`,
   );
   return build();
 }
@@ -160,7 +161,11 @@ test('the panel keeps its documented pixel defaults', () => {
 });
 
 test('the panel reads the same data source as the 3D page', () => {
-  assert.ok(html.includes('wind_speed_100m,wind_direction_10m,wind_gusts_10m'), 'the same hourly vars');
+  // The order matters: this string must stay identical to SITE.hourlyVars in src/config.js.
+  assert.ok(
+    html.includes('wind_speed_100m,wind_direction_10m,wind_speed_10m,wind_gusts_10m'),
+    'the same hourly vars',
+  );
   assert.ok(html.includes('wind_speed_unit=ms'), 'wind in m/s');
   assert.ok(html.includes('timeformat=unixtime'), 'unambiguous timestamps');
 });
@@ -365,4 +370,70 @@ test('sceneFor pairs a season with a phase, and the panel keeps its own palette 
   assert.ok(html.includes('app.scene = picked ? picked.scene : null'), 'and falls back to it');
   assert.ok(html.includes('var sc = app.scene || P;'), 'both the sky and the field read the scene');
   assert.equal(html.split('var sc = app.scene || P;').length - 1, 2, 'sky and field both read it');
+});
+
+// ---------------------------------------------------------------------------
+// the ground flag and the ground reading
+// ---------------------------------------------------------------------------
+
+test('the pennant is a triangle that droops when calm and ripples when not', () => {
+  const { FLAG } = lite;
+  const calm = [];
+  const fresh = [];
+  for (let j = 0; j < FLAG.len; j += 1) {
+    calm.push(lite.flagColumn(j, 0, 1.1));
+    fresh.push(lite.flagColumn(j, 12, 1.1));
+  }
+  // A triangle: full height at the mast, tapering to a point at the tip.
+  assert.equal(calm[0].half, Math.round(FLAG.tail / 2), 'full height at the mast');
+  assert.equal(calm[FLAG.len - 1].half, 0, 'and a point at the tip');
+  assert.ok(
+    calm.every((c, j) => j === 0 || c.half <= calm[j - 1].half),
+    'it only ever narrows',
+  );
+  // Calm: no ripple at all, and the pennant sags away from the mast.
+  assert.ok(calm.every((c) => c.wave === 0), 'a dead calm does not ripple');
+  assert.ok(calm[FLAG.len - 1].droop > calm[0].droop, 'and its tip droops');
+  // In wind: no droop, and a ripple that stays inside a couple of pixels.
+  assert.ok(fresh.every((c) => c.droop === 0), 'a full wind lifts the pennant');
+  assert.ok(fresh.some((c) => c.wave !== 0), 'and ripples it');
+  assert.ok(fresh.every((c) => Math.abs(c.wave) <= 2), 'without flapping out of the pixel grid');
+});
+
+test('the flag ripples on a capped clock, and never makes a still panel repaint', () => {
+  assert.equal(lite.flagPhaseRate(0), 0, 'a calm flag is static, so it costs nothing');
+  assert.equal(lite.flagPhaseRate(null), 0, 'and so is one with no reading');
+  const light = lite.flagPhaseRate(3);
+  const strong = lite.flagPhaseRate(11);
+  assert.ok(light > 0, 'a light wind still ripples');
+  assert.ok(strong > light, 'and a strong one quicker');
+  assert.equal(lite.flagPhaseRate(30), lite.flagPhaseRate(12), 'past 12 m/s it streams rather than blurs');
+  assert.ok(strong < 8, `the rate stays sane (${strong} rad/s)`);
+  // The cadence: the flag gets its own, slower than the rotor and far quicker than the heartbeat.
+  const waveMs = lite.FLAG.waveMs;
+  assert.ok(waveMs > 1000 / 12 && waveMs < 60000, 'the flag cadence sits between the rotor and the beat');
+  assert.equal(lite.paintIntervalMs({ waving: true, waveMs, movingMs: 83, heartbeatMs: 60000 }), waveMs);
+  assert.equal(lite.paintIntervalMs({ turning: true, waving: true, waveMs, movingMs: 83 }), 83, 'a turning rotor wins');
+  assert.equal(lite.paintIntervalMs({ heartbeatMs: 60000 }), 60000, 'a parked, calm panel still only beats');
+});
+
+test('the ground reading is the 10 m mean, not the 10 m gust', () => {
+  assert.ok(html.includes('wind_speed_10m'), 'the 10 m mean is requested from the API');
+  assert.ok(html.includes("'GROUND'"), 'the cell is labelled GROUND');
+  assert.ok(!html.includes('gustText'), 'the gust text is gone from the readout');
+  // It has to survive the hourly sampling, not just the fetch: a value that is dropped on the way to
+  // the drawing code would leave the flag and the cell permanently empty.
+  const when = new Date(2026, 9, 13, 12, 0).getTime();
+  const hours = [
+    { t: when - 3600000, v100: 8, v10: 4.4, dir: 250, gust: 11 },
+    { t: when, v100: 9, v10: 5.1, dir: 255, gust: 12 },
+    { t: when + 3600000, v100: 10, v10: 5.6, dir: 260, gust: 13 },
+  ];
+  const sample = lite.sampleHourly(hours, when);
+  assert.ok(sample, 'a sample comes back');
+  assert.equal(sample.v10, 5.1, 'with the ground wind attached');
+  assert.equal(sample.v100, 9, 'and the hub wind unchanged');
+  // Elapsed time, not frames: the rotor's old bug in a new outfit.
+  assert.ok(html.includes('app.flagPhase += dt * flagRate'), 'the flag phase advances with real time');
+  assert.ok(html.includes('flagPhaseRate(app.sample && app.sample.v10)'), 'driven by the ground wind');
 });

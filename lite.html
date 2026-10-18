@@ -26,6 +26,7 @@
         ?px=N                    pixel scale, integer, default 4
         ?wind=8&dir=260          demo: render a wind speed and direction with no network read
         ?motion=off              park the rotor: for a static render (an e-ink PNG) or a still panel
+        ?v10=3.4                force the ground wind, for a render or a preview
         ?scene=auto              the picture follows the season and the sun at the coordinate
         ?scene=winter.dawn       force one scene (winter|spring|summer|autumn x night|dawn|day|dusk)
 
@@ -73,7 +74,7 @@
         var DEFAULT_PX = 4; // 4x4 screen pixels per drawn pixel; the tested, default look
         var REFRESH_EVERY_HOURS = 6; // re-read the forecast every 6 hours, re-sample every hour
         var API = 'https://api.open-meteo.com/v1/forecast';
-        var HOURLY_VARS = 'wind_speed_100m,wind_direction_10m,wind_gusts_10m';
+        var HOURLY_VARS = 'wind_speed_100m,wind_direction_10m,wind_speed_10m,wind_gusts_10m';
         var FETCH_TIMEOUT_MS = 10000;
         var VIEWER_BEARING = 180; // the viewer stands due south, looking north (matches the 3D page)
 
@@ -172,7 +173,7 @@
          */
         function paintIntervalMs(opts) {
           var o = opts || {};
-          var ms = o.turning ? o.movingMs : o.settled ? o.settleMs : o.heartbeatMs;
+          var ms = o.turning ? o.movingMs : o.waving ? o.waveMs : o.settled ? o.settleMs : o.heartbeatMs;
           if (o.hidden) ms = Math.max(ms, o.hiddenMs);
           if (!(ms > 0) || !finite(ms)) {
             ms = o.heartbeatMs > 0 && finite(o.heartbeatMs) ? o.heartbeatMs : 60000;
@@ -306,6 +307,34 @@
           var season = seasonFor(when);
           var phase = phaseFor(when.getHours() * 60 + when.getMinutes(), solarEvents(lat, lon, when, utcOffsetSeconds));
           return { season: season, phase: phase, scene: SCENES[season][phase] };
+        }
+
+        // ---------------------------------------------------------------- the ground flag
+        // A short mast in the field with a slim triangular pennant, waving at the *ground* wind — the
+        // 10 m mean, not the 100 m wind the turbine feels. On a light-wind day the two differ by half,
+        // which is the whole point of showing both.
+        var FLAG = { poleH: 14, len: 9, tail: 5, xf: 0.2, waveMs: 1000 / 6 };
+
+        /**
+         * One column of the pennant. The triangle tapers to a point away from the mast; the ripple grows
+         * with distance from the mast and with the wind; a calm flag droops instead of waving. Pure, so
+         * the shape can be asserted rather than eyeballed.
+         */
+        function flagColumn(j, v10, phase) {
+          var strength = Math.max(0, Math.min(1, (finite(v10) ? v10 : 0) / 12));
+          var f = FLAG.len > 1 ? j / (FLAG.len - 1) : 1;
+          return {
+            half: Math.max(0, Math.round((1 - f) * (FLAG.tail / 2))),
+            wave: Math.round(Math.sin(phase - j * 0.55) * strength * 1.6 * f),
+            droop: Math.round((1 - strength) * FLAG.tail * 0.5 * f)
+          };
+        }
+
+        /** How fast the pennant ripples, in radians a second: capped, because a flag in a gale streams
+         *  rather than blurring, and zero at a calm so a still flag never forces a repaint. */
+        function flagPhaseRate(v10) {
+          var strength = Math.max(0, Math.min(1, (finite(v10) ? v10 : 0) / 12));
+          return strength > 0.05 ? 1.6 + 5.5 * strength : 0;
         }
 
         function sampleHourly(hours, when) {
@@ -505,6 +534,7 @@
           for (var g = 0; g < tufts; g++) {
             rect(3 + ((g * 13) % (W - 6)), HORIZON + 4 + ((g * 7) % Math.max(2, SCENE_H - HORIZON - 6)), 1, 1, sc.groundLight);
           }
+          drawFlag();
         }
 
         /**
@@ -551,6 +581,39 @@
          * screen and a wind off the viewer's shoulder leaves the machine end-on. The rotor sits at
          * the nose, upwind of the tower, and its disc foreshortens with the yaw.
          */
+        /** The ground flag: the pennant and its number, drawn over the field before the machine. */
+        function drawFlag() {
+          var forced = Number(q.get('v10')); // a preview and screenshot hook; live it comes from the read
+          var v10 = finite(forced)
+            ? Math.max(0, forced)
+            : app.sample && finite(app.sample.v10)
+              ? app.sample.v10
+              : null;
+          if (v10 === null) return; // nothing to show before the first reading
+          var swing = app.sample && finite(app.sample.dir) ? Math.sin((app.sample.dir * Math.PI) / 180) : 0;
+          var dir = swing >= 0 ? 1 : -1; // it streams downwind, opposite the nacelle's upwind nose
+          var px = Math.round(W * FLAG.xf);
+          var topY = HORIZON + 6 - FLAG.poleH;
+
+          rect(px, topY, 1, FLAG.poleH + 2, P.muted); // the mast
+          rect(px + (dir > 0 ? 0 : -1), topY, 2, 1, P.tower); // its cap
+
+          for (var j = 0; j < FLAG.len; j++) {
+            var col = flagColumn(j, v10, app.flagPhase);
+            rect(px + dir * (j + 1), topY + col.droop + col.wave - col.half, 1, col.half * 2 + 1, P.bladeDark);
+          }
+
+          // The number sits on the mast's side of the pennant — that side is always empty — on a small
+          // dark plate. Text on bare sky vanishes into a summer noon and glares against a winter night,
+          // and below the horizon is no room: the field is only ~17 framebuffer rows tall in portrait.
+          var label = v10 < 10 ? v10.toFixed(1) : String(Math.round(v10));
+          var plateW = label.length * 6 - 1 + 4;
+          var plateX = Math.max(1, Math.min(W - plateW - 1, dir < 0 ? px + 3 : px - plateW - 3));
+          rect(plateX, topY - 1, plateW, 11, P.panelBg);
+          rect(plateX, topY - 1, plateW, 1, P.panelLine);
+          text(label, plateX + 2, topY + 1, P.text, 1);
+        }
+
         function drawTurbine(rotorAngle, narrow, noseX) {
           var k = ROTOR_R / 22;
           for (var y = HUB.y + 2; y <= HORIZON; y++) {
@@ -660,7 +723,7 @@
           // --- row 2: the readings ---
           var rowY = (wide ? y : heroY) + GLYPH * heroScale + 3;
           var cells = [
-            ['GUST', s.gustText],
+            ['GROUND', s.groundText],
             ['DIR', s.dirText],
             ['ROTOR', s.rpmText + ' RPM'],
             ['POWER', s.powerText]
@@ -711,6 +774,7 @@
           scene: null,
           sceneKey: 'fixed',
           sceneAt: 0,
+          flagPhase: 0,
           // Both are chosen in start(): what the rotor does, and how often it is painted, depend on
           // the platform's motion preference and on ?motion=off.
           still: false,
@@ -776,11 +840,18 @@
           var hourly = payload && payload.hourly;
           if (!hourly || !hourly.time) return null;
           var speed = hourly.wind_speed_100m || [];
+          var near = hourly.wind_speed_10m || [];
           var dir = hourly.wind_direction_10m || [];
           var gust = hourly.wind_gusts_10m || [];
           var out = [];
           for (var i = 0; i < hourly.time.length; i++) {
-            out.push({ t: hourly.time[i] * 1000, v100: num(speed[i]), dir: num(dir[i]), gust: num(gust[i]) });
+            out.push({
+              t: hourly.time[i] * 1000,
+              v100: num(speed[i]),
+              v10: num(near[i]), // the mean wind at 10 m, which is what the flag and the GROUND cell show
+              dir: num(dir[i]),
+              gust: num(gust[i])
+            });
           }
           return out.length ? out : null;
         }
@@ -906,11 +977,11 @@
         // -------------------------------------------------------------- render
         function fillText(s) {
           var wind = app.sample && finite(app.sample.v100) ? app.sample.v100 : null;
-          var gust = app.sample && finite(app.sample.gust) ? app.sample.gust : null;
+          var near = app.sample && finite(app.sample.v10) ? app.sample.v10 : null;
           var dir = app.sample && finite(app.sample.dir) ? app.sample.dir : null;
           s.state = app.state || STATE.NODATA;
           s.windText = wind === null ? '--' : wind.toFixed(1);
-          s.gustText = gust === null ? '--' : gust.toFixed(1) + ' M/S';
+          s.groundText = near === null ? '--' : near.toFixed(1) + ' M/S';
           s.dirText = dir === null ? '--' : degrees(dir) + compass(dir);
           s.rpmText = app.rpm.toFixed(1);
           s.powerText = power(app.power);
@@ -1019,7 +1090,7 @@
           return [
             s.state,
             s.windText,
-            s.gustText,
+            s.groundText,
             s.dirText,
             s.rpmText,
             s.powerText,
@@ -1048,6 +1119,10 @@
           var animating = turning && !app.still;
           if (animating) app.angle = advanceAngle(app.angle, app.rpm, dt);
           updateScene(now, false); // cheap: re-derived once a minute, and forces a paint if it changed
+          // The flag ripples on its own clock, from elapsed time rather than from frames, and only while
+          // there is wind to show: at a dead calm its pixels never change, so it costs nothing.
+          var flagRate = app.still ? 0 : flagPhaseRate(app.sample && app.sample.v10);
+          if (flagRate > 0) app.flagPhase += dt * flagRate;
 
           // Cheap gates first, so an idle panel does almost no work per tick at all. A page the browser
           // reports as hidden is painted rarely rather than never: a kiosk panel that is wrong about
@@ -1055,6 +1130,8 @@
           var sincePaint = now - app.lastPaint;
           var interval = paintIntervalMs({
             turning: animating,
+            waving: flagRate > 0,
+            waveMs: FLAG.waveMs,
             settled: now - app.loadedAt < SETTLE_WINDOW_MS,
             hidden: !!document.hidden,
             movingMs: app.paintMovingMs,
@@ -1145,7 +1222,7 @@
             var st = rotorStateForWind(v, { prevState: null });
             app.lat = 52.52;
             app.lon = 13.405;
-            app.sample = { t: Date.now(), v100: v, dir: dir, gust: finite(v) ? v + 3 : null };
+            app.sample = { t: Date.now(), v100: v, v10: finite(v) ? v * 0.55 : null, dir: dir, gust: finite(v) ? v + 3 : null };
             app.state = st.state;
             app.prevState = st.state;
             app.targetRpm = st.rpm;
@@ -1182,7 +1259,7 @@
           var out = [];
           var base = Date.now();
           for (var i = 0; i < 36; i++) {
-            out.push({ t: base + i * 3600000, v100: Math.max(0, v - i * 0.4), dir: dir, gust: v + 3 });
+            out.push({ t: base + i * 3600000, v100: Math.max(0, v - i * 0.4), v10: Math.max(0, (v - i * 0.4) * 0.55), dir: dir, gust: v + 3 });
           }
           return out;
         }

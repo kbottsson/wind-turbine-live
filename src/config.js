@@ -39,7 +39,7 @@ export const CAMERA = Object.freeze({
 
 export const SITE = Object.freeze({
   apiBase: 'https://api.open-meteo.com/v1/forecast',
-  hourlyVars: ['wind_speed_100m', 'wind_direction_10m', 'wind_gusts_10m'],
+  hourlyVars: ['wind_speed_100m', 'wind_direction_10m', 'wind_speed_10m', 'wind_gusts_10m'],
   windSpeedUnit: 'ms',
   pastDays: 1,
   forecastDays: 2,
