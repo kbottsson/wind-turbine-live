@@ -11,7 +11,7 @@ below the rated speed, flat above it, and stopped outside the operating range.
 repository on every push to `main`, so the site cannot drift from the code.
 
 ```
-npm test              # 96 unit tests for the coordinate parser, control law, motion and panels
+npm test              # 99 unit tests for the coordinate parser, control law, motion and panels
 ./run.sh              # serve locally at http://localhost:8080/
 ./scripts/shots.sh    # render + assert every UI state in headless Chrome
 ```
@@ -171,6 +171,13 @@ that wrong is not a subtle error — the rotor turns 57× too slowly, which read
 | `?motion=off` | park the rotor for a still panel or a static render (an e-ink PNG). Nothing else stops the machine: the platform's reduce-motion preference only slows the painting (12 → 4 a second) and never stops the rotor |
 | `?scene=auto` | the picture follows the season and the sun at the watched coordinate: sixteen palettes, one per season × time of day |
 | `?scene=winter.dawn` | force one scene (`winter\|spring\|summer\|autumn` × `night\|dawn\|day\|dusk`) — how the preview sheet is rendered |
+| `?v10=3.4` | force the ground wind, for a render or a preview of the flag |
+
+The panel reads the wind twice, because the two numbers are usually very different: the headline is the
+**100 m** wind the turbine actually feels, and the **GROUND** reading is the mean at **10 m** — a flag on a
+short mast in the field shows the same thing as a waving pennant, and carries the number beside it. On a
+light day the turbine can be in 8 m/s while the air at head height is barely 4. The gust is still fetched
+but is no longer displayed: it is a peak, not a mean, so it does not belong under a GROUND label.
 
 The picture is the only thing the season changes. The machine, the readout and its background keep their
 colours, so a reading never becomes harder to read because of the sky behind it. The phase comes from the
@@ -294,7 +301,7 @@ from the physics. Three.js is loaded from a CDN (pinned), not vendored, by decis
 
 ## What has been verified, and how
 
-- `npm test` — 96 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
+- `npm test` — 99 unit tests, all passing: coordinate parsing (decimal, DMS both ways, Maps links,
   range rejection, junk), the control law against computed reference values, cut-out hysteresis,
   hourly sampling and clamping, the motion maths (rotor easing, yaw slew, angle integration), the
   framing and compass maths (the tower base and the topmost blade tip both inside the frame, with
