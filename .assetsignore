@@ -1,0 +1,12 @@
+tests/
+scripts/
+shots/
+node_modules/
+.git/
+.wrangler/
+package.json
+package-lock.json
+README.md
+run.sh
+wrangler.jsonc
+.assetsignore

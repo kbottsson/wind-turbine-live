@@ -1,0 +1,16 @@
+// Static-only Worker: no main script, just assets.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wind-turbine-live",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": ".",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    {
+      "pattern": "wind.kbottsson.com",
+      "custom_domain": true
+    }
+  ]
+}
